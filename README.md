@@ -1,10 +1,12 @@
 # AeroAssist — Airport Wheelchair Assistance Task Manager
 
-**Built for dnata (Emirates Group)** — themed in the Emirates brand (Emirates red on
-warm dark neutrals with gold accents). The header logo is a placeholder wordmark:
-replace `web/assets/brand-logo.svg` with the official dnata logo from your
-marketing/communications team (SVG, or an SVG wrapping a PNG) and it appears across
-the login page, dispatch dashboard, and agent app automatically.
+**Built for dnata (Emirates Group)** — themed in dnata's brand identity (dnata blue
+with the green tick as secondary accent, on cool dark neutrals). The official dnata
+logo (`web/assets/dnata-logo.png`, shown on a white chip via
+`web/assets/brand-logo.svg`) appears on the login page, dispatch dashboard, and
+agent app; the gold Emirates mark (`web/assets/emirates-logo.png`) sits on the
+login page as the group affiliation. To swap logo artwork later, replace those
+image files — no code changes.
 
 A working mobile + web application for managing wheelchair assistance tasks at an airport:
 an **admin (dispatcher)** creates and assigns tasks, a **staff member (agent)** executes

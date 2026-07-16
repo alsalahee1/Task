@@ -4,8 +4,8 @@
   "description": "Airport wheelchair assistance task manager",
   "start_url": "/agent",
   "display": "standalone",
-  "background_color": "#17141a",
-  "theme_color": "#17141a",
+  "background_color": "#0c1220",
+  "theme_color": "#0c1220",
   "icons": [
     { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]

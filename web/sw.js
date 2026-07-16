@@ -1,8 +1,8 @@
 // Minimal service worker: cache the static shell, network-first with cache fallback.
 // API requests are never cached (the agent app has its own localStorage queue).
-const CACHE = 'aeroassist-v3';
+const CACHE = 'aeroassist-v4';
 const SHELL = ['/', '/agent', '/admin', '/assets/app.css', '/assets/api.js',
-  '/assets/map.js', '/assets/agent.js', '/assets/admin.js', '/assets/i18n.js', '/assets/icon.svg', '/assets/brand-logo.svg'];
+  '/assets/map.js', '/assets/agent.js', '/assets/admin.js', '/assets/i18n.js', '/assets/icon.svg', '/assets/brand-logo.svg', '/assets/dnata-logo.png', '/assets/emirates-logo.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

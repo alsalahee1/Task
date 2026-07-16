@@ -216,7 +216,7 @@ async function openTask(id) {
   // map: planned legs + actual GPS route
   const lines = [];
   if (t.storage) lines.push({ from: t.storage, to: t.pickup, color: '#8a7db8' });
-  lines.push({ from: t.pickup, to: t.destination, color: '#c9a96a' });
+  lines.push({ from: t.pickup, to: t.destination, color: '#4fc0f0' });
   renderMap(document.getElementById('taskMap'), {
     locations: state.locations,
     lines,
@@ -449,7 +449,7 @@ async function renderMapTab() {
   const lines = [], routes = [], highlight = [];
   for (const t of details) {
     if (t.storage) lines.push({ from: t.storage, to: t.pickup, color: '#8a7db8' });
-    lines.push({ from: t.pickup, to: t.destination, color: '#c9a96a' });
+    lines.push({ from: t.pickup, to: t.destination, color: '#4fc0f0' });
     highlight.push(t.pickup.code, t.destination.code);
     if (t.trackpoints?.length) routes.push({ points: t.trackpoints, color: '#22c55e' });
   }
