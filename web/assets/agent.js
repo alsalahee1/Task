@@ -161,12 +161,14 @@ function renderHome() {
   });
   app.innerHTML = `
     ${!state.online ? `<div class="offline-banner">${t('offline_note')}</div>` : ''}
-    <div class="row spread">
-      <div><h2 style="margin:0">${t('hi')}, ${esc(me.name.split(' ')[0])} 👋</h2>
-        <span class="muted small">${state.tasks.length} ${t('active_tasks')}</span></div>
+    <div class="row spread" style="margin-bottom:6px">
+      <img src="/assets/brand-logo.svg" alt="dnata" style="height:24px">
+      <span class="grow"></span>
       <span id="langHost"></span>
       <button id="logout" class="small">${t('sign_out')}</button>
     </div>
+    <div><h2 style="margin:0">${t('hi')}, ${esc(me.name.split(' ')[0])} 👋</h2>
+      <span class="muted small">${state.tasks.length} ${t('active_tasks')}</span></div>
     <div class="card mt">
       <div class="row spread">
         <div><b>${state.onDuty ? t('on_duty') : t('off_duty')}</b>

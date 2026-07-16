@@ -2,7 +2,7 @@
 const DICT = {
   en: {
     // shared
-    sign_in: 'Sign in', sign_out: 'Sign out', tagline: 'Airport wheelchair assistance — task manager',
+    sign_in: 'Sign in', sign_out: 'Sign out', tagline: 'dnata assisted travel — wheelchair task manager',
     username: 'Username', password: 'Password',
     sla_met: 'SLA met', sla_breached: 'SLA breached', overdue: 'OVERDUE',
     // statuses
@@ -55,7 +55,7 @@ const DICT = {
   },
   ar: {
     sign_in: 'تسجيل الدخول', sign_out: 'تسجيل الخروج',
-    tagline: 'خدمة الكراسي المتحركة في المطار — إدارة المهام',
+    tagline: 'دناتا للمساعدة في السفر — إدارة مهام الكراسي المتحركة',
     username: 'اسم المستخدم', password: 'كلمة المرور',
     sla_met: 'ضمن الوقت المحدد', sla_breached: 'تجاوز الوقت المحدد', overdue: 'متأخر',
     st_CREATED: 'غير مُسند', st_ASSIGNED: 'مُسند', st_ACCEPTED: 'مقبول',

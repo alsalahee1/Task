@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 84" role="img" aria-label="dnata — An Emirates Group company">
+  <!-- Placeholder wordmark. Replace this file with the official dnata logo from
+       your marketing/communications team (an SVG, or an SVG wrapping a PNG via
+       <image>) and it appears across the whole app automatically. -->
+  <text x="0" y="46" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="46" font-weight="800" letter-spacing="-1" fill="#f4f0f2">dnata</text>
+  <circle cx="152" cy="42" r="6" fill="#d71921"/>
+  <text x="0" y="72" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="15" font-weight="600" letter-spacing="1.5" fill="#a99fab">AN EMIRATES GROUP COMPANY</text>
+</svg>
