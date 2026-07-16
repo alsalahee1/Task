@@ -29,6 +29,7 @@ const state = {
   audit: [],
   summary: null,
   mapTerminal: '',   // '' = whole airport
+  reportMode: 'ops', // 'ops' | 'compliance'
   reportRange: { from: today(), to: today() },
 };
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -115,6 +116,7 @@ function taskCard(t) {
       <span class="badge blue">${esc(t.flight_number || t.flight_direction)}</span>
       ${prio}
       ${t.has_problem ? '<span class="badge red">⚠ problem</span>' : ''}
+      ${t.late_notification ? '<span class="badge amber" title="Late airline notification">⚠ late notice</span>' : ''}
       <span class="grow"></span>
       <span data-sla-task="${t.id}">${slaPill(t)}</span>
     </div>
@@ -195,6 +197,8 @@ async function openTask(id) {
       <span class="badge">${esc(t.ssr_code)} · ${esc(t.wheelchair_type)}</span>
       <span class="badge ${t.priority === 'NORMAL' ? '' : t.priority === 'URGENT' ? 'red' : 'amber'}">${t.priority}</span>
       <span class="badge">${statusLabel(t.status)}</span>
+      ${t.late_notification ? '<span class="badge amber" title="Airline notified us close to the flight time">⚠ late airline notice</span>' : ''}
+      ${t.delay_reason ? `<span class="badge red">delay: ${esc(t.delay_reason.replaceAll('_', ' ').toLowerCase())}</span>` : ''}
       ${slaPill(t)}
     </div>
     ${t.passenger_notes ? `<p class="small" style="color:var(--warning-fg)">📝 ${esc(t.passenger_notes)}</p>` : ''}
@@ -238,18 +242,28 @@ async function openTask(id) {
       <div style="width:360px; max-width:100%">
         <div class="map-wrap" id="taskMap"></div>
         ${!isDone ? `
-          <h3 class="small muted mt" style="text-transform:uppercase">Assign agents</h3>
+          <h3 class="small muted mt" style="text-transform:uppercase">${assignedIds.length ? 'Reassign / add agents' : 'Assign agents'}</h3>
           <select id="assignSelect" multiple size="4">
             ${state.agents.map(a => `<option value="${a.id}" ${assignedIds.includes(a.id) ? 'selected disabled' : ''}>
-              ${esc(a.name)} ${a.on_duty ? '🟢 on duty' : '⚪ off duty'}</option>`).join('')}
+              ${esc(a.name)} ${a.disabled ? '🚫 disabled' : a.on_break ? '☕ on break' : a.on_duty ? '🟢 on duty' : '⚪ off duty'}</option>`).join('')}
           </select>
           <div class="row mt">
             <button class="primary grow" id="assignBtn">${tr('assign_selected')}</button>
             <button class="danger" id="cancelBtn">${tr('cancel_task')}</button>
           </div>
-          <button class="mt" style="width:100%" id="autoAssignBtn">${tr('auto_assign')}</button>
+          <div class="row mt">
+            <button class="grow" id="autoAssignBtn">${tr('auto_assign')}</button>
+            ${assignedIds.length ? '<button class="grow" id="reassignBtn" title="Hand this task over to the selected agent(s)">⇄ Reassign to selected</button>' : ''}
+          </div>
           ${onDuty.length === 0 ? '<p class="small" style="color:var(--warning-fg)">No agents on duty right now.</p>' : ''}
         ` : ''}
+        <h3 class="small muted mt" style="text-transform:uppercase">Delay reason ${slaPill(t).includes('breach') ? '⚠' : ''}</h3>
+        <select id="delayReason">
+          <option value="">— none —</option>
+          ${['LATE_NOTIFICATION', 'UNDERSTAFFED', 'EQUIPMENT', 'PASSENGER_DELAY', 'ACCESS_ISSUE', 'FLIGHT_CHANGE', 'OTHER']
+            .map(r => `<option value="${r}" ${t.delay_reason === r ? 'selected' : ''}>${r.replaceAll('_', ' ').toLowerCase()}</option>`).join('')}
+        </select>
+        <button class="mt" style="width:100%" id="delaySave">Save delay reason</button>
       </div>
     </div>
   </div></div>`;
@@ -302,6 +316,31 @@ async function openTask(id) {
       closeModal(); render();
     } catch (ex) { toast(ex.message, true); }
   };
+
+  const reassignBtn = document.getElementById('reassignBtn');
+  if (reassignBtn) reassignBtn.onclick = async () => {
+    const ids = [...document.getElementById('assignSelect').selectedOptions]
+      .filter(o => !o.disabled).map(o => Number(o.value));
+    if (!ids.length) return toast('Select the agent(s) to hand the task over to', true);
+    const reason = prompt('Reason for reassignment (optional):') || '';
+    try {
+      const updated = await API.post(`/api/tasks/${t.id}/reassign`, { agent_ids: ids, reason });
+      state.tasks.set(updated.id, updated);
+      toast('Task reassigned');
+      closeModal(); render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+
+  const delaySave = document.getElementById('delaySave');
+  if (delaySave) delaySave.onclick = async () => {
+    try {
+      const updated = await API.post(`/api/tasks/${t.id}/delay-reason`,
+        { reason: document.getElementById('delayReason').value || null });
+      state.tasks.set(updated.id, updated);
+      toast('Delay reason saved');
+      closeModal(); render();
+    } catch (ex) { toast(ex.message, true); }
+  };
 }
 
 // ---------- new task ----------
@@ -342,6 +381,13 @@ function renderNew() {
           </select></div>
         <div><label>Priority</label>
           <select name="priority"><option>NORMAL</option><option>HIGH</option><option>URGENT</option></select></div>
+      </div>
+      <div class="row">
+        <div class="grow"><label>Flight time (optional)</label>
+          <input name="flight_time" id="flightTime" type="datetime-local"></div>
+        <div class="grow"><label>Airline notified at (optional)</label>
+          <input name="notified_at" id="notifiedAt" type="datetime-local">
+          <div class="small muted">Leave blank = now. Used to flag late airline notice.</div></div>
       </div>
       <label>Wheelchair storage (optional)</label>
       <select name="storage_id" id="storageSel">${locOptions(['STORAGE'], true)}</select>
@@ -390,6 +436,13 @@ function renderNew() {
         sel.value = String(f.gate.id);
         sel.dispatchEvent(new Event('change'));
       }
+      if (f.sched_time) {
+        // populate the datetime-local field from the flight's scheduled time
+        const d = new Date(f.sched_time);
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        const ft = document.getElementById('flightTime');
+        if (ft && !ft.value) ft.value = local;
+      }
       info.textContent = `✓ ${f.direction} · gate ${f.gate?.code || '?'} · ${f.status}` +
         (f.sched_time ? ` · ${new Date(f.sched_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '');
     } catch { info.textContent = 'flight not in schedule — fill fields manually'; }
@@ -425,6 +478,11 @@ function renderNew() {
     if (body.admin_est_minutes) body.admin_est_minutes = Number(body.admin_est_minutes);
     else delete body.admin_est_minutes;
     body.sla_target_minutes = Number(body.sla_target_minutes);
+    // datetime-local (local time, no zone) → ISO; blank fields dropped
+    for (const k of ['flight_time', 'notified_at']) {
+      if (body[k]) body[k] = new Date(body[k]).toISOString();
+      else delete body[k];
+    }
     if (body.agent_id === 'auto') body.auto_assign = true;
     else if (body.agent_id) body.agent_ids = [Number(body.agent_id)];
     delete body.agent_id;
@@ -816,7 +874,12 @@ function renderTemplates() {
 // ---------- reports ----------
 async function renderReports() {
   const { from, to } = state.reportRange;
-  page.innerHTML = `<div class="row">
+  page.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <button class="${state.reportMode === 'ops' ? 'primary' : ''}" data-rep-mode="ops">Operations</button>
+      <button class="${state.reportMode === 'compliance' ? 'primary' : ''}" data-rep-mode="compliance">Airline compliance</button>
+    </div>
+    <div class="row">
       <div><label>From</label><input type="date" id="repFrom" value="${from}"></div>
       <div><label>To</label><input type="date" id="repTo" value="${to}"></div>
       <div style="align-self:flex-end"><button class="primary" id="repLoad">Load</button></div>
@@ -824,6 +887,9 @@ async function renderReports() {
     </div>
     <div id="repBody" class="mt"><span class="muted">Loading…</span></div>`;
 
+  page.querySelectorAll('[data-rep-mode]').forEach(b => b.onclick = () => {
+    state.reportMode = b.dataset.repMode; renderReports();
+  });
   document.getElementById('repLoad').onclick = () => {
     state.reportRange = {
       from: document.getElementById('repFrom').value,
@@ -831,6 +897,8 @@ async function renderReports() {
     };
     renderReports();
   };
+
+  if (state.reportMode === 'compliance') return renderCompliance(from, to);
 
   const s = await API.get(`/api/reports/summary?from=${from}&to=${to}`);
   state.summary = s;
@@ -875,6 +943,55 @@ async function renderReports() {
   };
 }
 
+// ---------- airline compliance report ----------
+async function renderCompliance(from, to) {
+  const body = document.getElementById('repBody');
+  let rep;
+  try { rep = await API.get(`/api/reports/compliance?from=${from}&to=${to}`); }
+  catch (ex) { body.innerHTML = `<div class="card muted">${esc(ex.message)}</div>`; return; }
+  const T = rep.totals;
+  const pctColor = p => p == null ? 'var(--muted)'
+    : p >= 90 ? 'var(--green)' : p >= 70 ? 'var(--amber)' : 'var(--red)';
+  body.innerHTML = `
+    <div class="stats">
+      <div class="card stat"><div class="k">Assistance requests</div><div class="v">${T.requests}</div></div>
+      <div class="card stat"><div class="k">SLA compliance</div>
+        <div class="v" style="color:${pctColor(T.compliance_pct)}">${T.compliance_pct ?? '—'}%</div></div>
+      <div class="card stat"><div class="k">Breaches</div><div class="v">${T.breaches}</div></div>
+      <div class="card stat"><div class="k">Late airline notice</div><div class="v">${T.late_notifications}</div></div>
+    </div>
+    <div class="card mt">
+      <div class="row spread"><h3 style="margin:0">Per airline · ${esc(from)} → ${esc(to)}</h3>
+        <span class="muted small">Late notice = airline notified &lt; ${rep.late_threshold_minutes} min before the flight</span></div>
+      <table><thead><tr>
+        <th>Airline</th><th>Requests</th><th>Completed</th><th>SLA measured</th>
+        <th>Compliance</th><th>Breaches</th><th>Late notice</th><th>Breaches w/ late notice</th>
+      </tr></thead>
+      <tbody>${rep.airlines.map(a => `<tr>
+        <td><b>${esc(a.airline)}</b></td>
+        <td>${a.requests}</td><td>${a.completed}</td><td>${a.sla_measured}</td>
+        <td><span class="badge ${a.compliance_pct == null ? '' : a.compliance_pct >= 90 ? 'green' : a.compliance_pct >= 70 ? 'amber' : 'red'}">
+          ${a.compliance_pct ?? '—'}%</span></td>
+        <td>${a.breaches}</td>
+        <td>${a.late_notifications}</td>
+        <td>${a.late_notification_breaches || 0}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No assistance requests in this period</td></tr>'}</tbody></table>
+      <p class="muted small mt">Breaches marked with late airline notice are the ones a handler can attribute to the airline rather than to ground operations.</p>
+    </div>`;
+
+  document.getElementById('repCsv').onclick = () => {
+    const rows = [['airline', 'requests', 'completed', 'sla_measured', 'compliance_pct',
+      'breaches', 'late_notifications', 'late_notification_breaches'],
+      ...rep.airlines.map(a => [a.airline, a.requests, a.completed, a.sla_measured,
+        a.compliance_pct ?? '', a.breaches, a.late_notifications, a.late_notification_breaches || 0])];
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const el = document.createElement('a');
+    el.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    el.download = `dnata-airline-compliance-${from}-${to}.csv`;
+    el.click();
+  };
+}
+
 // ---------- team ----------
 const ALL_SKILLS = ['AISLE_CHAIR', 'TWO_PERSON_LIFT', 'ELECTRIC_CART'];
 const ROLE_BADGE = { ADMIN: 'red', SUPERVISOR: 'amber', AGENT: '' };
@@ -897,6 +1014,7 @@ async function renderTeam() {
       <td><span class="badge ${ROLE_BADGE[u.role] || ''}">${u.role}</span></td>
       <td class="small">${u.skills?.length ? u.skills.join(', ') : '—'}</td>
       <td>${u.disabled ? '<span class="badge red">disabled</span>'
+        : u.on_break ? '<span class="badge amber">on break</span>'
         : u.on_duty ? '<span class="badge green">on duty</span>'
         : '<span class="badge">off duty</span>'}</td>
       ${isAdmin ? `<td class="row" style="gap:6px">

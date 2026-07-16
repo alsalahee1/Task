@@ -16,6 +16,7 @@ const state = {
   taskId: null,
   tasks: [],
   onDuty: false,
+  onBreak: false,
   online: navigator.onLine,
 };
 
@@ -106,6 +107,7 @@ async function refresh() {
   try {
     const [meNow, tasks] = await Promise.all([API.get('/api/me'), API.get('/api/tasks?active=1')]);
     state.onDuty = meNow.on_duty;
+    state.onBreak = meNow.on_break;
     state.tasks = tasks;
     state.online = true;
   } catch { state.online = false; }
@@ -174,11 +176,13 @@ function renderHome() {
       <span class="muted small">${state.tasks.length} ${t('active_tasks')}</span></div>
     <div class="card mt">
       <div class="row spread">
-        <div><b>${state.onDuty ? t('on_duty') : t('off_duty')}</b>
-          <div class="muted small">${state.onDuty ? t('on_duty_hint') : t('off_duty_hint')}</div></div>
+        <div><b>${state.onBreak ? t('on_break') : state.onDuty ? t('on_duty') : t('off_duty')}</b>
+          <div class="muted small">${state.onBreak ? t('on_break_hint') : state.onDuty ? t('on_duty_hint') : t('off_duty_hint')}</div></div>
         <button class="${state.onDuty ? 'danger' : 'primary'}" id="shiftBtn">
           ${state.onDuty ? t('end_shift') : t('start_shift')}</button>
       </div>
+      ${state.onDuty ? `<button class="${state.onBreak ? 'primary' : ''} mt" style="width:100%" id="breakBtn">
+        ${state.onBreak ? t('end_break') : t('take_break')}</button>` : ''}
     </div>
     <h3 class="mt">${t('my_tasks')}</h3>
     ${sorted.map(t => `
@@ -208,6 +212,15 @@ function renderHome() {
     try {
       await API.post('/api/shift', { on_duty: !state.onDuty });
       state.onDuty = !state.onDuty;
+      if (!state.onDuty) state.onBreak = false;
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+  const breakBtn = document.getElementById('breakBtn');
+  if (breakBtn) breakBtn.onclick = async () => {
+    try {
+      await API.post('/api/break', { on_break: !state.onBreak });
+      state.onBreak = !state.onBreak;
       render();
     } catch (ex) { toast(ex.message, true); }
   };

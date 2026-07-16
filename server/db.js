@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL CHECK (role IN ('ADMIN','SUPERVISOR','AGENT')),
   skills TEXT NOT NULL DEFAULT '[]',
   on_duty INTEGER NOT NULL DEFAULT 0,
+  on_break INTEGER NOT NULL DEFAULT 0,
   disabled INTEGER NOT NULL DEFAULT 0,
   must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at TEXT,
@@ -82,7 +83,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   sla_met INTEGER,
   status TEXT NOT NULL DEFAULT 'CREATED',
   cancel_reason TEXT,
-  completed_at TEXT
+  completed_at TEXT,
+  notified_at TEXT,
+  late_notification INTEGER NOT NULL DEFAULT 0,
+  delay_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS task_assignments (
   id INTEGER PRIMARY KEY,
@@ -217,6 +221,12 @@ function migrate(db) {
     db.exec('ALTER TABLE tasks ADD COLUMN passenger_phone TEXT');
   if (!taskCols.includes('wheelchair_id'))
     db.exec('ALTER TABLE tasks ADD COLUMN wheelchair_id INTEGER REFERENCES wheelchairs(id)');
+  if (!taskCols.includes('notified_at'))
+    db.exec('ALTER TABLE tasks ADD COLUMN notified_at TEXT');
+  if (!taskCols.includes('late_notification'))
+    db.exec('ALTER TABLE tasks ADD COLUMN late_notification INTEGER NOT NULL DEFAULT 0');
+  if (!taskCols.includes('delay_reason'))
+    db.exec('ALTER TABLE tasks ADD COLUMN delay_reason TEXT');
 
   // Account-management columns on users.
   const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
@@ -226,6 +236,8 @@ function migrate(db) {
     db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
   if (!userCols.includes('created_at'))
     db.exec('ALTER TABLE users ADD COLUMN created_at TEXT');
+  if (!userCols.includes('on_break'))
+    db.exec('ALTER TABLE users ADD COLUMN on_break INTEGER NOT NULL DEFAULT 0');
 
   // Sliding-expiry timestamp on sessions.
   const sessCols = db.prepare('PRAGMA table_info(sessions)').all().map(c => c.name);
@@ -247,15 +259,16 @@ function migrate(db) {
         role TEXT NOT NULL CHECK (role IN ('ADMIN','SUPERVISOR','AGENT')),
         skills TEXT NOT NULL DEFAULT '[]',
         on_duty INTEGER NOT NULL DEFAULT 0,
+        on_break INTEGER NOT NULL DEFAULT 0,
         disabled INTEGER NOT NULL DEFAULT 0,
         must_change_password INTEGER NOT NULL DEFAULT 0,
         created_at TEXT,
         last_lat REAL, last_lng REAL, last_seen TEXT
       );
       INSERT INTO users_new (id, username, password_hash, name, role, skills, on_duty,
-        disabled, must_change_password, created_at, last_lat, last_lng, last_seen)
+        on_break, disabled, must_change_password, created_at, last_lat, last_lng, last_seen)
       SELECT id, username, password_hash, name, role, skills, on_duty,
-        disabled, must_change_password, created_at, last_lat, last_lng, last_seen FROM users;
+        on_break, disabled, must_change_password, created_at, last_lat, last_lng, last_seen FROM users;
       DROP TABLE users;
       ALTER TABLE users_new RENAME TO users;
     `);

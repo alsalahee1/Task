@@ -39,6 +39,18 @@ put the server behind any TLS reverse proxy for field use.
 
 ## What's implemented
 
+- **Airline compliance & delay tracking**: the **Reports → Airline compliance** view
+  breaks SLA performance down **per airline** — requests, compliance %, breaches, and
+  how many breaches came with **late airline notification** (assistance notified less
+  than a configurable threshold, default 120 min, before the flight) — the evidence a
+  handler uses to attribute breaches to the airline rather than to ground operations.
+  Exportable as CSV for the monthly airline report. Dispatchers tag each late task
+  with a **delay reason code** (late notification / understaffed / equipment /
+  passenger delay / access issue / flight change), which the report attributes.
+- **Agent availability & handover**: agents can mark themselves **on a break**
+  (auto-assign skips them; they keep their tasks); dispatchers can **reassign an
+  in-progress task** to another agent mid-journey (e.g. shift change) — the task keeps
+  its stage and timeline, and the handover is logged and audited.
 - **Accounts, roles & security**: three roles — **admin** (full control incl. staff
   management and airport config), **supervisor** (dispatch + reports + audit, no user
   management), **agent** (mobile app). Admins manage staff from the **Staff** tab

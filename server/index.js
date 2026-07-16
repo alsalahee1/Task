@@ -61,7 +61,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   function publicUser(u) {
     return {
       id: u.id, username: u.username, name: u.name, role: u.role,
-      skills: JSON.parse(u.skills || '[]'), on_duty: !!u.on_duty,
+      skills: JSON.parse(u.skills || '[]'), on_duty: !!u.on_duty, on_break: !!u.on_break,
       disabled: !!u.disabled, must_change_password: !!u.must_change_password,
       created_at: u.created_at,
       last_lat: u.last_lat, last_lng: u.last_lng, last_seen: u.last_seen,
@@ -168,10 +168,29 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     return c && { id: c.id, qr_code: c.qr_code, type: c.type, status: c.status };
   }
 
+  // Late-notification: did the airline notify us too close to the flight? The lead
+  // threshold (minutes before the flight) is configurable; default 120 min. This is
+  // the evidence a handler uses to attribute an SLA breach to late airline notice.
+  const lateThreshold = () => Number(getSetting('late_notification_minutes')) || 120;
+  function lateNotificationFlag(flightTime, notifiedAt) {
+    if (!flightTime || !notifiedAt) return 0;
+    const leadMins = (Date.parse(flightTime) - Date.parse(notifiedAt)) / 60000;
+    return Number.isFinite(leadMins) && leadMins < lateThreshold() ? 1 : 0;
+  }
+
+  // Airline code = the IATA prefix of the flight number (letters before the digits).
+  function airlineOf(flightNumber) {
+    if (!flightNumber) return '—';
+    const m = String(flightNumber).trim().toUpperCase().match(/^([A-Z]{2,3})/);
+    return m ? m[1] : '—';
+  }
+
   function taskJson(task, { withEvents = false } = {}) {
     const next = nextStage(task);
     const out = {
       ...task,
+      late_notification: !!task.late_notification,
+      airline: airlineOf(task.flight_number),
       wheelchair: chairBrief(task.wheelchair_id),
       storage: locBrief(task.storage_id),
       pickup: locBrief(task.pickup_id),
@@ -276,7 +295,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     const start = getLoc.get(task.storage_id || task.pickup_id);
     const needs = requiredSkills(task);
     const candidates = db.prepare(
-      `SELECT * FROM users WHERE role = 'AGENT' AND on_duty = 1`).all()
+      `SELECT * FROM users WHERE role = 'AGENT' AND on_duty = 1 AND on_break = 0 AND disabled = 0`).all()
       .filter(a => {
         const skills = JSON.parse(a.skills || '[]');
         return needs.every(s => skills.includes(s));
@@ -447,7 +466,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   // ---------- report ----------
   function taskReport(task) {
     const events = taskEvents(task.id);
-    const NON_STAGE = [...LOG_ONLY_EVENTS, 'GATE_CHANGED'];
+    const NON_STAGE = [...LOG_ONLY_EVENTS, 'GATE_CHANGED', 'REASSIGNED'];
     const stageEvents = events.filter(e => !NON_STAGE.includes(e.type));
     const timeline = stageEvents.map((e, i) => ({
       type: e.type, at: e.server_time, agent: e.agent_name, note: e.note,
@@ -543,10 +562,22 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   route('POST', /^\/api\/shift$/, ['AGENT'], (req, res, m, body, user) => {
-    db.prepare('UPDATE users SET on_duty = ?, last_seen = ? WHERE id = ?')
-      .run(body.on_duty ? 1 : 0, now(), user.id);
+    // Going off duty also ends any break.
+    db.prepare('UPDATE users SET on_duty = ?, on_break = CASE WHEN ? = 0 THEN 0 ELSE on_break END, last_seen = ? WHERE id = ?')
+      .run(body.on_duty ? 1 : 0, body.on_duty ? 1 : 0, now(), user.id);
     broadcast('agent', publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
     json(res, 200, { ok: true, on_duty: !!body.on_duty });
+  });
+
+  // Break toggle — an on-duty agent marks themselves temporarily unavailable.
+  // Auto-assign skips agents on break; they still see and can act on their tasks.
+  route('POST', /^\/api\/break$/, ['AGENT'], (req, res, m, body, user) => {
+    const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    if (!fresh.on_duty) return err(res, 409, 'Go on duty before taking a break');
+    db.prepare('UPDATE users SET on_break = ?, last_seen = ? WHERE id = ?')
+      .run(body.on_break ? 1 : 0, now(), user.id);
+    broadcast('agent', publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
+    json(res, 200, { ok: true, on_break: !!body.on_break });
   });
 
   route('POST', /^\/api\/position$/, ['AGENT'], (req, res, m, body, user) => {
@@ -904,12 +935,15 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       const est = estimateTask(storageId, pickupId, destinationId);
       const slaTarget = SLA_DEFAULTS[flight.direction] || 30;
       const createdAt = now();
+      const notifiedAt = body.notified_at || createdAt;
+      const lateFlag = lateNotificationFlag(flight.sched_time, notifiedAt);
       const r = db.prepare(
         `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_phone,
           passenger_notes, ssr_code, wheelchair_type, flight_number, flight_direction,
           flight_time, priority, storage_id, pickup_id, destination_id,
-          template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at,
+          notified_at, late_notification)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(user.id, createdAt, name, p.phone || null,
           `Auto-created from airline SSR list (${ssr})`,
           ssr, ssr === 'WCHC' ? 'AISLE' : 'MANUAL',
@@ -917,7 +951,8 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
           ssr === 'WCHC' ? 'HIGH' : 'NORMAL',
           storageId, pickupId, destinationId,
           est.total_minutes, est.total_minutes, slaTarget,
-          new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString());
+          new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString(),
+          notifiedAt, lateFlag);
       const task = getTask(r.lastInsertRowid);
       let autoResult = null;
       if (body.auto_assign) autoResult = autoAssign(task, user);
@@ -941,19 +976,24 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       ? slaRaw : (SLA_DEFAULTS[flight_direction] || 30);
     const createdAt = now();
     const deadline = new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString();
+    // When the airline notified us of this assistance need (defaults to now).
+    const notifiedAt = body.notified_at || createdAt;
+    const flightTime = body.flight_time || null;
+    const lateFlag = lateNotificationFlag(flightTime, notifiedAt);
     const r = db.prepare(
       `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_phone,
         passenger_notes, ssr_code, wheelchair_type, flight_number, flight_direction,
         flight_time, priority, storage_id, pickup_id, destination_id,
-        template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at,
+        notified_at, late_notification)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(user.id, createdAt, passenger_name, body.passenger_phone || null,
         body.passenger_notes || null,
         body.ssr_code || 'WCHR', body.wheelchair_type || 'MANUAL',
-        body.flight_number || null, flight_direction, body.flight_time || null,
+        body.flight_number || null, flight_direction, flightTime,
         body.priority || 'NORMAL', body.storage_id || null, pickup_id, destination_id,
         est.total_minutes, Number(body.admin_est_minutes) || est.total_minutes,
-        slaTarget, deadline);
+        slaTarget, deadline, notifiedAt, lateFlag);
     const task = getTask(r.lastInsertRowid);
     let autoResult;
     if (Array.isArray(body.agent_ids) && body.agent_ids.length) assign(task, body.agent_ids, user);
@@ -1117,6 +1157,55 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, taskJson(getTask(task.id)));
   });
 
+  // Reassign an in-progress task to different agent(s). Keeps the task's status and
+  // timeline; records who took over and why. Used when an agent goes off-shift,
+  // is injured, or a supervisor rebalances load mid-task.
+  const DELAY_REASONS = ['LATE_NOTIFICATION', 'UNDERSTAFFED', 'EQUIPMENT',
+    'PASSENGER_DELAY', 'ACCESS_ISSUE', 'FLIGHT_CHANGE', 'OTHER'];
+
+  route('POST', /^\/api\/tasks\/(\d+)\/reassign$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    if (TERMINAL_STATUSES.includes(task.status)) return err(res, 409, `Task is ${task.status}`);
+    const ids = (body.agent_ids || []).map(Number).filter(Boolean);
+    if (!ids.length) return err(res, 400, 'agent_ids required');
+    for (const id of ids) {
+      const a = db.prepare(`SELECT 1 FROM users WHERE id = ? AND role = 'AGENT' AND disabled = 0`).get(id);
+      if (!a) return err(res, 400, `User ${id} is not an active agent`);
+    }
+    const prev = taskAssignments(task.id).map(a => a.agent_name);
+    db.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(task.id);
+    const ins = db.prepare(
+      `INSERT INTO task_assignments (task_id, agent_id, role, assigned_at) VALUES (?,?,?,?)`);
+    ids.forEach((id, i) => ins.run(task.id, id, i === 0 ? 'PRIMARY' : 'ASSIST', now()));
+    const names = ids.map(id => db.prepare('SELECT name FROM users WHERE id = ?').get(id)?.name).filter(Boolean);
+    // Never let a task sit "unassigned"; if it was CREATED, move it to ASSIGNED.
+    if (task.status === 'CREATED') db.prepare(`UPDATE tasks SET status = 'ASSIGNED' WHERE id = ?`).run(task.id);
+    db.prepare(
+      `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, note)
+       VALUES (?,?,?,?,?,?)`)
+      .run(randomUUID(), task.id, user.id, 'REASSIGNED', now(),
+        `${prev.join(', ') || 'unassigned'} → ${names.join(', ')}` +
+        (body.reason ? ` (${body.reason})` : ''));
+    notifier.onTaskEvent(getTask(task.id), 'ASSIGNED', names[0]);
+    audit(user, 'TASK_REASSIGN', `task #${task.id}`, `${prev.join(', ') || '—'} → ${names.join(', ')}`);
+    pushTaskUpdate(task.id);
+    json(res, 200, taskJson(getTask(task.id)));
+  });
+
+  // Tag why a task ran late — the root-cause code that feeds the compliance report.
+  route('POST', /^\/api\/tasks\/(\d+)\/delay-reason$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    const reason = body.reason || null;
+    if (reason && !DELAY_REASONS.includes(reason))
+      return err(res, 400, 'Unknown delay reason');
+    db.prepare('UPDATE tasks SET delay_reason = ? WHERE id = ?').run(reason, task.id);
+    audit(user, 'DELAY_REASON', `task #${task.id}`, reason || 'cleared');
+    pushTaskUpdate(task.id);
+    json(res, 200, taskJson(getTask(task.id)));
+  });
+
   route('GET', /^\/api\/tasks\/(\d+)\/report$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
@@ -1124,6 +1213,55 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   // --- summary reports ---
+  // Per-airline compliance report — the monthly figures a handler reports to each
+  // airline: SLA compliance %, breaches, and how many breaches came with late
+  // airline notification (the handler's defence against SLA penalties).
+  route('GET', /^\/api\/reports\/compliance$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
+    const from = url.searchParams.get('from') || '0000';
+    const to = url.searchParams.get('to')
+      ? new Date(Date.parse(url.searchParams.get('to')) + 86400000).toISOString().slice(0, 10)
+      : '9999';
+    const tasks = db.prepare(
+      'SELECT * FROM tasks WHERE created_at >= ? AND created_at < ?').all(from, to);
+    const byAirline = new Map();
+    for (const t of tasks) {
+      const code = airlineOf(t.flight_number);
+      if (!byAirline.has(code)) byAirline.set(code, {
+        airline: code, requests: 0, completed: 0, cancelled: 0,
+        sla_measured: 0, sla_met: 0, breaches: 0, late_notifications: 0,
+        breach_reasons: {},
+      });
+      const a = byAirline.get(code);
+      a.requests++;
+      if (t.status === 'COMPLETED') a.completed++;
+      if (t.status === 'CANCELLED') a.cancelled++;
+      if (t.late_notification) a.late_notifications++;
+      if (t.sla_met !== null) {
+        a.sla_measured++;
+        if (t.sla_met === 1) a.sla_met++;
+        else {
+          a.breaches++;
+          const reason = t.delay_reason || 'UNTAGGED';
+          a.breach_reasons[reason] = (a.breach_reasons[reason] || 0) + 1;
+        }
+      }
+    }
+    const airlines = [...byAirline.values()].map(a => ({
+      ...a,
+      compliance_pct: a.sla_measured ? Math.round((a.sla_met / a.sla_measured) * 100) : null,
+      late_notification_breaches: Object.entries(a.breach_reasons)
+        .filter(([k]) => k === 'LATE_NOTIFICATION').reduce((s, [, v]) => s + v, 0),
+    })).sort((x, y) => y.requests - x.requests);
+    const totals = airlines.reduce((s, a) => ({
+      requests: s.requests + a.requests, completed: s.completed + a.completed,
+      sla_measured: s.sla_measured + a.sla_measured, sla_met: s.sla_met + a.sla_met,
+      breaches: s.breaches + a.breaches, late_notifications: s.late_notifications + a.late_notifications,
+    }), { requests: 0, completed: 0, sla_measured: 0, sla_met: 0, breaches: 0, late_notifications: 0 });
+    totals.compliance_pct = totals.sla_measured
+      ? Math.round((totals.sla_met / totals.sla_measured) * 100) : null;
+    json(res, 200, { period: { from, to }, late_threshold_minutes: lateThreshold(), airlines, totals });
+  });
+
   route('GET', /^\/api\/reports\/summary$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
     const from = url.searchParams.get('from') || '0000';
     const to = url.searchParams.get('to')
