@@ -1,0 +1,13 @@
+{
+  "name": "aeroassist",
+  "version": "0.1.0",
+  "description": "Airport wheelchair (PRM) assistance task manager — admin dispatch dashboard + agent mobile app",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

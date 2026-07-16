@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AeroAssist — Sign in</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="card login-card">
+      <div style="text-align:center; margin-bottom: 18px">
+        <div style="font-size:44px">♿</div>
+        <h1 style="margin:8px 0 2px">Aero<span style="color:var(--accent-2)">Assist</span></h1>
+        <div class="muted small">Airport wheelchair assistance — task manager</div>
+      </div>
+      <form id="loginForm">
+        <label>Username</label>
+        <input id="username" autocomplete="username" required autofocus>
+        <label>Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <div id="error" style="color:var(--red); margin-top:10px; display:none; font-weight:600"></div>
+        <button class="primary" style="width:100%; margin-top:18px; padding:13px" type="submit">Sign in</button>
+      </form>
+      <div class="muted small" style="margin-top:16px; text-align:center">
+        Demo accounts — admin: <b>admin/admin123</b> · agent: <b>ahmed/agent123</b>
+      </div>
+    </div>
+  </div>
+  <script type="module">
+    import { API } from '/assets/api.js';
+    const go = user => location.href = user.role === 'ADMIN' ? '/admin' : '/agent';
+    if (API.token && API.user) go(API.user);
+    document.getElementById('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = document.getElementById('error');
+      err.style.display = 'none';
+      try {
+        const user = await API.login(username.value.trim(), password.value);
+        go(user);
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

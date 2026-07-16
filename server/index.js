@@ -1,0 +1,636 @@
+// AeroAssist server — zero-dependency Node.js (node:http + node:sqlite + SSE).
+import { createServer } from 'node:http';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join, normalize, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { openDb, verifyPassword } from './db.js';
+import {
+  nextStage, validateEvent, stagesFor, STAGE_ACTION_LABELS,
+  TERMINAL_STATUSES, LOG_ONLY_EVENTS,
+} from './statemachine.js';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const WEB_DIR = join(ROOT, 'web');
+const SLA_DEFAULTS = { ARRIVAL: 20, DEPARTURE: 30, TRANSFER: 30 };
+const WALK_METERS_PER_MIN = 55; // pushing a wheelchair; used only when no template exists
+
+export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {}) {
+  const db = openDb(dbPath);
+  const now = () => new Date().toISOString();
+
+  // ---------- live updates (Server-Sent Events) ----------
+  const sseClients = new Set(); // { res, user }
+  function broadcast(event, payload, { agentIds = null } = {}) {
+    const msg = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const c of sseClients) {
+      const isAdmin = c.user.role === 'ADMIN';
+      const isTargetAgent = agentIds ? agentIds.includes(c.user.id) : c.user.role === 'AGENT';
+      if (isAdmin || isTargetAgent) c.res.write(msg);
+    }
+  }
+
+  // ---------- helpers ----------
+  const getUserByToken = db.prepare(
+    `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`);
+  const getLoc = db.prepare('SELECT * FROM locations WHERE id = ?');
+  const getTemplate = db.prepare(
+    'SELECT * FROM route_templates WHERE from_id = ? AND to_id = ?');
+
+  function publicUser(u) {
+    return {
+      id: u.id, username: u.username, name: u.name, role: u.role,
+      skills: JSON.parse(u.skills || '[]'), on_duty: !!u.on_duty,
+      last_lat: u.last_lat, last_lng: u.last_lng, last_seen: u.last_seen,
+    };
+  }
+
+  function legEstimate(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return null;
+    const tpl = getTemplate.get(fromId, toId);
+    if (tpl) return { minutes: tpl.est_minutes, source: tpl.manually_set ? 'template' : 'learned' };
+    const a = getLoc.get(fromId), b = getLoc.get(toId);
+    if (!a || !b) return null;
+    const dist = Math.hypot(a.x - b.x, a.y - b.y); // map units ≈ meters
+    return { minutes: Math.max(2, Math.round(dist / WALK_METERS_PER_MIN)), source: 'distance' };
+  }
+
+  function estimateTask(storageId, pickupId, destinationId) {
+    const legs = [];
+    if (storageId) legs.push({ name: 'storage_to_pickup', ...legEstimate(storageId, pickupId) });
+    legs.push({ name: 'pickup_to_destination', ...legEstimate(pickupId, destinationId) });
+    const valid = legs.filter(l => l.minutes != null);
+    return {
+      legs,
+      total_minutes: valid.length ? Math.round(valid.reduce((s, l) => s + l.minutes, 0)) : null,
+    };
+  }
+
+  function taskAssignments(taskId) {
+    return db.prepare(
+      `SELECT ta.agent_id, ta.role, ta.assigned_at, u.name AS agent_name
+       FROM task_assignments ta JOIN users u ON u.id = ta.agent_id
+       WHERE ta.task_id = ?`).all(taskId);
+  }
+
+  function taskEvents(taskId) {
+    return db.prepare(
+      `SELECT e.*, u.name AS agent_name FROM task_events e
+       LEFT JOIN users u ON u.id = e.agent_id
+       WHERE e.task_id = ? ORDER BY e.id`).all(taskId);
+  }
+
+  function slaState(task) {
+    if (task.status === 'CANCELLED') return 'cancelled';
+    if (task.sla_met === 1) return 'met';
+    if (task.sla_met === 0) return 'breached';
+    return new Date() >= new Date(task.sla_deadline_at) ? 'breached' : 'pending';
+  }
+
+  function locBrief(id) {
+    if (!id) return null;
+    const l = getLoc.get(id);
+    return l && { id: l.id, code: l.code, name: l.name, type: l.type, x: l.x, y: l.y };
+  }
+
+  function taskJson(task, { withEvents = false } = {}) {
+    const next = nextStage(task);
+    const out = {
+      ...task,
+      storage: locBrief(task.storage_id),
+      pickup: locBrief(task.pickup_id),
+      destination: locBrief(task.destination_id),
+      assignments: taskAssignments(task.id),
+      sla_state: slaState(task),
+      next_action: next && { type: next, label: STAGE_ACTION_LABELS[next] },
+      has_problem: !!db.prepare(
+        `SELECT 1 FROM task_events WHERE task_id = ? AND type IN ('PROBLEM_REPORTED','ESCALATED') LIMIT 1`
+      ).get(task.id),
+    };
+    if (withEvents) {
+      out.events = taskEvents(task.id);
+      out.trackpoints = db.prepare(
+        'SELECT lat, lng, accuracy, recorded_at FROM trackpoints WHERE task_id = ? ORDER BY id'
+      ).all(task.id);
+    }
+    return out;
+  }
+
+  const getTask = id => db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+
+  function pushTaskUpdate(taskId) {
+    const t = getTask(taskId);
+    if (!t) return;
+    broadcast('task', taskJson(t), { agentIds: taskAssignments(taskId).map(a => a.agent_id) });
+  }
+
+  // ---------- template learning ----------
+  function recordActual(fromId, toId, minutes) {
+    if (!fromId || !toId || !(minutes > 0)) return;
+    db.prepare('INSERT INTO route_actuals (from_id, to_id, minutes, completed_at) VALUES (?,?,?,?)')
+      .run(fromId, toId, minutes, now());
+    let tpl = getTemplate.get(fromId, toId);
+    if (!tpl) {
+      db.prepare(
+        `INSERT INTO route_templates (from_id, to_id, est_minutes, sample_count, manually_set)
+         VALUES (?,?,?,0,0)`).run(fromId, toId, Math.round(minutes * 10) / 10);
+      tpl = getTemplate.get(fromId, toId);
+    }
+    const count = tpl.sample_count + 1;
+    let est = tpl.est_minutes, learned = tpl.manually_set;
+    if (count >= 5) {
+      const last = db.prepare(
+        `SELECT minutes FROM route_actuals WHERE from_id = ? AND to_id = ?
+         ORDER BY id DESC LIMIT 20`).all(fromId, toId).map(r => r.minutes).sort((a, b) => a - b);
+      const mid = Math.floor(last.length / 2);
+      const median = last.length % 2 ? last[mid] : (last[mid - 1] + last[mid]) / 2;
+      est = Math.round(median * 10) / 10;
+      learned = 0;
+    }
+    db.prepare(
+      'UPDATE route_templates SET sample_count = ?, est_minutes = ?, manually_set = ? WHERE id = ?')
+      .run(count, est, learned, tpl.id);
+  }
+
+  function eventTime(taskId, type) {
+    const r = db.prepare(
+      'SELECT server_time FROM task_events WHERE task_id = ? AND type = ? ORDER BY id LIMIT 1'
+    ).get(taskId, type);
+    return r ? new Date(r.server_time) : null;
+  }
+
+  function minutesBetween(a, b) {
+    return a && b ? Math.round(((b - a) / 60000) * 100) / 100 : null;
+  }
+
+  function onTaskCompleted(task) {
+    db.prepare('UPDATE tasks SET completed_at = ? WHERE id = ?').run(now(), task.id);
+    const t = id => eventTime(task.id, id);
+    if (task.storage_id) {
+      const m = minutesBetween(t('EN_ROUTE_TO_STORAGE'), t('ARRIVED_AT_PICKUP'));
+      recordActual(task.storage_id, task.pickup_id, m);
+    }
+    const transit = minutesBetween(t('PASSENGER_PICKED_UP'), t('PASSENGER_DELIVERED'));
+    recordActual(task.pickup_id, task.destination_id, transit);
+  }
+
+  // ---------- geo ----------
+  function haversineMeters(a, b) {
+    const R = 6371000, toRad = d => (d * Math.PI) / 180;
+    const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function taskDistanceMeters(taskId) {
+    const pts = db.prepare(
+      'SELECT lat, lng FROM trackpoints WHERE task_id = ? ORDER BY id').all(taskId);
+    let d = 0;
+    for (let i = 1; i < pts.length; i++) d += haversineMeters(pts[i - 1], pts[i]);
+    return Math.round(d);
+  }
+
+  // ---------- report ----------
+  function taskReport(task) {
+    const events = taskEvents(task.id);
+    const stageEvents = events.filter(e => !LOG_ONLY_EVENTS.includes(e.type));
+    const timeline = stageEvents.map((e, i) => ({
+      type: e.type, at: e.server_time, agent: e.agent_name, note: e.note,
+      minutes_since_previous: i === 0
+        ? minutesBetween(new Date(task.created_at), new Date(e.server_time))
+        : minutesBetween(new Date(stageEvents[i - 1].server_time), new Date(e.server_time)),
+    }));
+    const t = id => eventTime(task.id, id);
+    return {
+      task: taskJson(task, { withEvents: true }),
+      timeline,
+      problems: events.filter(e => LOG_ONLY_EVENTS.includes(e.type)),
+      totals: {
+        total_minutes: minutesBetween(new Date(task.created_at), t('COMPLETED')),
+        response_minutes: minutesBetween(new Date(task.created_at), t('ACCEPTED')),
+        passenger_wait_minutes: minutesBetween(new Date(task.created_at), t('ARRIVED_AT_PICKUP')),
+        transit_minutes: minutesBetween(t('PASSENGER_PICKED_UP'), t('PASSENGER_DELIVERED')),
+        distance_meters: taskDistanceMeters(task.id),
+        template_est_minutes: task.template_est_minutes,
+        admin_est_minutes: task.admin_est_minutes,
+        sla_target_minutes: task.sla_target_minutes,
+        sla_state: slaState(task),
+      },
+    };
+  }
+
+  // ---------- routing ----------
+  const routes = [];
+  const route = (method, pattern, roles, handler) =>
+    routes.push({ method, pattern, roles, handler });
+
+  const json = (res, code, body) => {
+    const data = JSON.stringify(body);
+    res.writeHead(code, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    });
+    res.end(data);
+  };
+  const err = (res, code, message) => json(res, code, { error: message });
+
+  // --- auth ---
+  route('POST', /^\/api\/login$/, null, (req, res, m, body) => {
+    const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.username || '');
+    if (!u || !verifyPassword(body.password || '', u.password_hash))
+      return err(res, 401, 'Invalid username or password');
+    const token = randomBytes(32).toString('hex');
+    db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)')
+      .run(token, u.id, now());
+    json(res, 200, { token, user: publicUser(u) });
+  });
+
+  route('POST', /^\/api\/logout$/, ['ADMIN', 'AGENT'], (req, res, m, body, user) => {
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(user._token);
+    json(res, 200, { ok: true });
+  });
+
+  route('GET', /^\/api\/me$/, ['ADMIN', 'AGENT'], (req, res, m, b, user) =>
+    json(res, 200, publicUser(user)));
+
+  // --- users / shift ---
+  route('GET', /^\/api\/agents$/, ['ADMIN', 'AGENT'], (req, res) => {
+    const agents = db.prepare(`SELECT * FROM users WHERE role = 'AGENT' ORDER BY name`).all();
+    json(res, 200, agents.map(publicUser));
+  });
+
+  route('POST', /^\/api\/shift$/, ['AGENT'], (req, res, m, body, user) => {
+    db.prepare('UPDATE users SET on_duty = ?, last_seen = ? WHERE id = ?')
+      .run(body.on_duty ? 1 : 0, now(), user.id);
+    broadcast('agent', publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
+    json(res, 200, { ok: true, on_duty: !!body.on_duty });
+  });
+
+  route('POST', /^\/api\/position$/, ['AGENT'], (req, res, m, body, user) => {
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number')
+      return err(res, 400, 'lat/lng required');
+    db.prepare('UPDATE users SET last_lat = ?, last_lng = ?, last_seen = ? WHERE id = ?')
+      .run(body.lat, body.lng, now(), user.id);
+    broadcast('agent', publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
+    json(res, 200, { ok: true });
+  });
+
+  // --- locations ---
+  route('GET', /^\/api\/locations$/, ['ADMIN', 'AGENT'], (req, res) =>
+    json(res, 200, db.prepare('SELECT * FROM locations ORDER BY type, code').all()));
+
+  route('POST', /^\/api\/locations$/, ['ADMIN'], (req, res, m, body) => {
+    const { code, name, type, x, y } = body;
+    if (!code || !name || !type || typeof x !== 'number' || typeof y !== 'number')
+      return err(res, 400, 'code, name, type, x, y required');
+    const { lat, lng } = { lat: 25.256 - y / 1e5, lng: 55.36 + x / 1e5 };
+    try {
+      const r = db.prepare(
+        `INSERT INTO locations (code, name, type, terminal, x, y, lat, lng)
+         VALUES (?,?,?,?,?,?,?,?)`)
+        .run(code, name, type, body.terminal || 'T1', x, y, lat, lng);
+      json(res, 201, getLoc.get(r.lastInsertRowid));
+    } catch { err(res, 409, 'Location code already exists'); }
+  });
+
+  // --- templates ---
+  route('GET', /^\/api\/templates$/, ['ADMIN', 'AGENT'], (req, res) => {
+    const rows = db.prepare(
+      `SELECT t.*, f.code AS from_code, f.name AS from_name,
+              d.code AS to_code, d.name AS to_name
+       FROM route_templates t
+       JOIN locations f ON f.id = t.from_id JOIN locations d ON d.id = t.to_id
+       ORDER BY f.code, d.code`).all();
+    json(res, 200, rows);
+  });
+
+  route('PUT', /^\/api\/templates$/, ['ADMIN'], (req, res, m, body) => {
+    const { from_id, to_id, est_minutes } = body;
+    if (!from_id || !to_id || !(est_minutes > 0))
+      return err(res, 400, 'from_id, to_id, est_minutes required');
+    db.prepare(
+      `INSERT INTO route_templates (from_id, to_id, est_minutes, manually_set)
+       VALUES (?,?,?,1)
+       ON CONFLICT(from_id, to_id)
+       DO UPDATE SET est_minutes = excluded.est_minutes, manually_set = 1`)
+      .run(from_id, to_id, est_minutes);
+    json(res, 200, getTemplate.get(from_id, to_id));
+  });
+
+  route('GET', /^\/api\/estimate$/, ['ADMIN'], (req, res, m, b, u, url) => {
+    const q = url.searchParams;
+    json(res, 200, estimateTask(
+      Number(q.get('storage')) || null, Number(q.get('pickup')), Number(q.get('destination'))));
+  });
+
+  // --- tasks ---
+  route('POST', /^\/api\/tasks$/, ['ADMIN'], (req, res, m, body, user) => {
+    const { passenger_name, pickup_id, destination_id, flight_direction } = body;
+    if (!passenger_name || !pickup_id || !destination_id || !flight_direction)
+      return err(res, 400, 'passenger_name, pickup_id, destination_id, flight_direction required');
+    if (!getLoc.get(pickup_id) || !getLoc.get(destination_id) ||
+        (body.storage_id && !getLoc.get(body.storage_id)))
+      return err(res, 400, 'Unknown location id');
+    const est = estimateTask(body.storage_id || null, pickup_id, destination_id);
+    const slaRaw = Number(body.sla_target_minutes);
+    const slaTarget = body.sla_target_minutes != null && Number.isFinite(slaRaw) && slaRaw >= 0
+      ? slaRaw : (SLA_DEFAULTS[flight_direction] || 30);
+    const createdAt = now();
+    const deadline = new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString();
+    const r = db.prepare(
+      `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_notes, ssr_code,
+        wheelchair_type, flight_number, flight_direction, flight_time, priority,
+        storage_id, pickup_id, destination_id, template_est_minutes, admin_est_minutes,
+        sla_target_minutes, sla_deadline_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(user.id, createdAt, passenger_name, body.passenger_notes || null,
+        body.ssr_code || 'WCHR', body.wheelchair_type || 'MANUAL',
+        body.flight_number || null, flight_direction, body.flight_time || null,
+        body.priority || 'NORMAL', body.storage_id || null, pickup_id, destination_id,
+        est.total_minutes, Number(body.admin_est_minutes) || est.total_minutes,
+        slaTarget, deadline);
+    const task = getTask(r.lastInsertRowid);
+    if (Array.isArray(body.agent_ids) && body.agent_ids.length) assign(task, body.agent_ids, user);
+    pushTaskUpdate(task.id);
+    json(res, 201, taskJson(getTask(task.id)));
+  });
+
+  function assign(task, agentIds, byUser) {
+    const ins = db.prepare(
+      `INSERT OR IGNORE INTO task_assignments (task_id, agent_id, role, assigned_at)
+       VALUES (?,?,?,?)`);
+    agentIds.forEach((id, i) => ins.run(task.id, id, i === 0 ? 'PRIMARY' : 'ASSIST', now()));
+    if (task.status === 'CREATED') {
+      db.prepare(`UPDATE tasks SET status = 'ASSIGNED' WHERE id = ?`).run(task.id);
+      db.prepare(
+        `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time)
+         VALUES (?,?,?,?,?)`)
+        .run(randomUUID(), task.id, byUser.id, 'ASSIGNED', now());
+    }
+  }
+
+  route('POST', /^\/api\/tasks\/(\d+)\/assign$/, ['ADMIN'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    if (TERMINAL_STATUSES.includes(task.status))
+      return err(res, 409, `Task is ${task.status}`);
+    const ids = (body.agent_ids || []).map(Number).filter(Boolean);
+    if (!ids.length) return err(res, 400, 'agent_ids required');
+    for (const id of ids) {
+      const a = db.prepare(`SELECT 1 FROM users WHERE id = ? AND role = 'AGENT'`).get(id);
+      if (!a) return err(res, 400, `User ${id} is not an agent`);
+    }
+    assign(task, ids, user);
+    pushTaskUpdate(task.id);
+    json(res, 200, taskJson(getTask(task.id)));
+  });
+
+  route('GET', /^\/api\/tasks$/, ['ADMIN', 'AGENT'], (req, res, m, b, user, url) => {
+    const q = url.searchParams;
+    let sql = 'SELECT DISTINCT t.* FROM tasks t';
+    const where = [], params = [];
+    if (user.role === 'AGENT' || q.get('agent') === 'me') {
+      sql += ' JOIN task_assignments ta ON ta.task_id = t.id';
+      where.push('ta.agent_id = ?'); params.push(user.id);
+    }
+    if (q.get('status')) { where.push('t.status = ?'); params.push(q.get('status')); }
+    if (q.get('active') === '1')
+      where.push(`t.status NOT IN ('COMPLETED','CANCELLED')`);
+    if (q.get('date')) {
+      where.push(`t.created_at >= ? AND t.created_at < ?`);
+      const d = q.get('date');
+      params.push(d, new Date(Date.parse(d) + 86400000).toISOString().slice(0, 10));
+    }
+    if (where.length) sql += ' WHERE ' + where.join(' AND ');
+    sql += ' ORDER BY t.id DESC LIMIT 500';
+    json(res, 200, db.prepare(sql).all(...params).map(t => taskJson(t)));
+  });
+
+  route('GET', /^\/api\/tasks\/(\d+)$/, ['ADMIN', 'AGENT'], (req, res, m, b, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    json(res, 200, taskJson(task, { withEvents: true }));
+  });
+
+  route('POST', /^\/api\/tasks\/(\d+)\/events$/, ['ADMIN', 'AGENT'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    if (user.role === 'AGENT' &&
+        !taskAssignments(task.id).some(a => a.agent_id === user.id))
+      return err(res, 403, 'You are not assigned to this task');
+    const { type } = body;
+    // Idempotency: offline retries resend the same client-generated uuid.
+    if (body.uuid) {
+      const dup = db.prepare('SELECT id FROM task_events WHERE uuid = ?').get(body.uuid);
+      if (dup) return json(res, 200, { ok: true, duplicate: true, task: taskJson(getTask(task.id)) });
+    }
+    const v = validateEvent(task, type);
+    if (!v.ok) return err(res, 409, v.error);
+    const serverTime = now();
+    db.prepare(
+      `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, client_time, lat, lng, note)
+       VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(body.uuid || randomUUID(), task.id, user.id, type, serverTime,
+        body.client_time || null, body.lat ?? null, body.lng ?? null, body.note || null);
+    if (v.statusChange) {
+      db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(v.statusChange, task.id);
+      if (type === 'ARRIVED_AT_PICKUP') {
+        const met = new Date(serverTime) <= new Date(task.sla_deadline_at) ? 1 : 0;
+        db.prepare('UPDATE tasks SET sla_met = ? WHERE id = ?').run(met, task.id);
+      }
+      if (type === 'COMPLETED') onTaskCompleted(getTask(task.id));
+    }
+    pushTaskUpdate(task.id);
+    json(res, 200, { ok: true, task: taskJson(getTask(task.id)) });
+  });
+
+  route('POST', /^\/api\/tasks\/(\d+)\/trackpoints$/, ['AGENT', 'ADMIN'],
+    (req, res, m, body, user) => {
+      const task = getTask(Number(m[1]));
+      if (!task) return err(res, 404, 'Task not found');
+      const points = Array.isArray(body) ? body : body.points || [];
+      const ins = db.prepare(
+        `INSERT INTO trackpoints (task_id, agent_id, lat, lng, accuracy, recorded_at)
+         VALUES (?,?,?,?,?,?)`);
+      let n = 0;
+      for (const p of points) {
+        if (typeof p.lat !== 'number' || typeof p.lng !== 'number') continue;
+        ins.run(task.id, user.id, p.lat, p.lng, p.accuracy ?? null, p.recorded_at || now());
+        n++;
+      }
+      if (n) {
+        db.prepare('UPDATE users SET last_lat = ?, last_lng = ?, last_seen = ? WHERE id = ?')
+          .run(points.at(-1).lat, points.at(-1).lng, now(), user.id);
+        broadcast('agent', publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
+      }
+      json(res, 200, { ok: true, saved: n });
+    });
+
+  route('POST', /^\/api\/tasks\/(\d+)\/cancel$/, ['ADMIN'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    if (TERMINAL_STATUSES.includes(task.status)) return err(res, 409, `Task is ${task.status}`);
+    if (!body.reason) return err(res, 400, 'reason required');
+    db.prepare(`UPDATE tasks SET status = 'CANCELLED', cancel_reason = ? WHERE id = ?`)
+      .run(body.reason, task.id);
+    db.prepare(
+      `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, note)
+       VALUES (?,?,?,?,?,?)`)
+      .run(randomUUID(), task.id, user.id, 'CANCELLED', now(), body.reason);
+    pushTaskUpdate(task.id);
+    json(res, 200, taskJson(getTask(task.id)));
+  });
+
+  route('GET', /^\/api\/tasks\/(\d+)\/report$/, ['ADMIN', 'AGENT'], (req, res, m) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    json(res, 200, taskReport(task));
+  });
+
+  // --- summary reports ---
+  route('GET', /^\/api\/reports\/summary$/, ['ADMIN'], (req, res, m, b, u, url) => {
+    const from = url.searchParams.get('from') || '0000';
+    const to = url.searchParams.get('to')
+      ? new Date(Date.parse(url.searchParams.get('to')) + 86400000).toISOString().slice(0, 10)
+      : '9999';
+    const tasks = db.prepare(
+      'SELECT * FROM tasks WHERE created_at >= ? AND created_at < ?').all(from, to);
+    const completed = tasks.filter(t => t.status === 'COMPLETED');
+    const durations = completed
+      .map(t => minutesBetween(new Date(t.created_at), new Date(t.completed_at)))
+      .filter(Boolean).sort((a, b) => a - b);
+    const median = durations.length
+      ? durations[Math.floor(durations.length / 2)] : null;
+    const slaKnown = tasks.filter(t => t.sla_met !== null);
+
+    const perAgent = db.prepare(
+      `SELECT u.id, u.name,
+              COUNT(DISTINCT ta.task_id) AS tasks_assigned,
+              SUM(CASE WHEN t.status = 'COMPLETED' THEN 1 ELSE 0 END) AS tasks_completed
+       FROM users u
+       JOIN task_assignments ta ON ta.agent_id = u.id
+       JOIN tasks t ON t.id = ta.task_id
+       WHERE t.created_at >= ? AND t.created_at < ?
+       GROUP BY u.id ORDER BY tasks_completed DESC`).all(from, to);
+    for (const a of perAgent) {
+      a.distance_meters = db.prepare(
+        `SELECT COUNT(*) AS n FROM trackpoints tp JOIN tasks t ON t.id = tp.task_id
+         WHERE tp.agent_id = ? AND t.created_at >= ? AND t.created_at < ?`)
+        .get(a.id, from, to).n > 1
+        ? db.prepare(
+            `SELECT DISTINCT task_id FROM trackpoints WHERE agent_id = ?`).all(a.id)
+            .reduce((s, r) => s + taskDistanceMeters(r.task_id), 0)
+        : 0;
+    }
+
+    const perRoute = db.prepare(
+      `SELECT f.code AS from_code, d.code AS to_code, rt.est_minutes, rt.sample_count,
+              rt.manually_set,
+              (SELECT COUNT(*) FROM route_actuals ra
+               WHERE ra.from_id = rt.from_id AND ra.to_id = rt.to_id
+                 AND ra.completed_at >= ? AND ra.completed_at < ?) AS actuals_in_period
+       FROM route_templates rt
+       JOIN locations f ON f.id = rt.from_id JOIN locations d ON d.id = rt.to_id
+       ORDER BY actuals_in_period DESC, f.code`).all(from, to);
+
+    json(res, 200, {
+      period: { from, to },
+      totals: {
+        created: tasks.length,
+        completed: completed.length,
+        cancelled: tasks.filter(t => t.status === 'CANCELLED').length,
+        active: tasks.filter(t => !TERMINAL_STATUSES.includes(t.status)).length,
+        sla_compliance_pct: slaKnown.length
+          ? Math.round((slaKnown.filter(t => t.sla_met === 1).length / slaKnown.length) * 100)
+          : null,
+        avg_duration_minutes: durations.length
+          ? Math.round((durations.reduce((s, d) => s + d, 0) / durations.length) * 10) / 10
+          : null,
+        median_duration_minutes: median,
+      },
+      per_agent: perAgent,
+      per_route: perRoute,
+    });
+  });
+
+  // ---------- HTTP server ----------
+  const MIME = {
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+    '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+    '.ico': 'image/x-icon',
+  };
+
+  function serveStatic(res, urlPath) {
+    let rel = urlPath === '/' ? '/index.html' : urlPath;
+    if (!extname(rel)) rel += '.html';
+    const file = normalize(join(WEB_DIR, rel));
+    if (!file.startsWith(WEB_DIR) || !existsSync(file) || !statSync(file).isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('Not found');
+    }
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
+    res.end(readFileSync(file));
+  }
+
+  const server = createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const path = url.pathname;
+
+    // Live stream (auth via query param because EventSource can't set headers).
+    if (path === '/api/stream') {
+      const u = getUserByToken.get(url.searchParams.get('token') || '');
+      if (!u) return err(res, 401, 'Unauthorized');
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write('retry: 3000\n\n');
+      const client = { res, user: u };
+      sseClients.add(client);
+      const hb = setInterval(() => res.write(': hb\n\n'), 25000);
+      req.on('close', () => { clearInterval(hb); sseClients.delete(client); });
+      return;
+    }
+
+    if (!path.startsWith('/api/')) return serveStatic(res, path);
+
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 5e6) req.destroy(); });
+    req.on('end', () => {
+      let body = {};
+      if (raw) {
+        try { body = JSON.parse(raw); } catch { return err(res, 400, 'Invalid JSON'); }
+      }
+      for (const r of routes) {
+        if (r.method !== req.method) continue;
+        const m = path.match(r.pattern);
+        if (!m) continue;
+        let user = null;
+        if (r.roles) {
+          const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+          user = getUserByToken.get(token);
+          if (!user) return err(res, 401, 'Unauthorized');
+          if (!r.roles.includes(user.role)) return err(res, 403, 'Forbidden');
+          user._token = token;
+        }
+        try { return r.handler(req, res, m, body, user, url); }
+        catch (e) { console.error(e); return err(res, 500, 'Internal error'); }
+      }
+      err(res, 404, 'Not found');
+    });
+  });
+
+  return { server, db };
+}
+
+// Start directly (not under test import).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const port = Number(process.env.PORT) || 3000;
+  const { server } = createApp({ dbPath: process.env.AERO_DB || undefined });
+  server.listen(port, () =>
+    console.log(`AeroAssist running on http://localhost:${port}
+  Admin dashboard: http://localhost:${port}/admin   (admin / admin123)
+  Agent app:       http://localhost:${port}/agent   (ahmed / agent123)`));
+}

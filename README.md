@@ -1,6 +1,6 @@
 # AeroAssist — Airport Wheelchair Assistance Task Manager
 
-A mobile + web application for managing wheelchair assistance tasks at an airport:
+A working mobile + web application for managing wheelchair assistance tasks at an airport:
 an **admin (dispatcher)** creates and assigns tasks, a **staff member (agent)** executes
 them step by step (get wheelchair → pick up passenger → deliver to destination), and the
 system records **timing, GPS route, and full task results** automatically.
@@ -9,6 +9,51 @@ This is the same category of software that major airports and ground handlers us
 known in the industry as **PRM management software** (PRM = Passenger with Reduced
 Mobility). Examples used by big companies: Ozion PRM Manager (London Heathrow and 18+
 airports), AvTech SSR/PRM (used by US wheelchair-assistance vendors), and Avtura AV PAX.
+
+## Quick start
+
+Requires only **Node.js 22+** — no npm dependencies, no database server (uses Node's
+built-in SQLite).
+
+```bash
+npm start          # runs on http://localhost:3000
+npm test           # backend integration tests (full lifecycle, SLA, GPS, learning)
+```
+
+| App | URL | Demo login |
+|---|---|---|
+| Admin / dispatcher dashboard | `http://localhost:3000/admin` | `admin` / `admin123` |
+| Agent mobile app (installable PWA) | `http://localhost:3000/agent` | `ahmed` / `agent123` (also `fatima`, `john`, `sara`) |
+
+To use the agent app on a real phone, open the server's address in the phone's
+browser and "Add to Home Screen". GPS breadcrumbs need HTTPS (or localhost) —
+put the server behind any TLS reverse proxy for field use.
+
+## What's implemented
+
+- **Admin dashboard**: live task board with color-coded SLA countdowns (green → amber
+  → red, updated every second via Server-Sent Events), task creation with
+  auto-filled template estimates, agent assignment (multi-agent supported), live
+  terminal map, template editor, reports with CSV export, team view.
+- **Agent app** (mobile-first): shift on/off, prioritized task queue, one-tap stage
+  progression (`Accept → Chair collected → Arrived at pickup → Passenger picked up →
+  In transit → Delivered → Complete`), progress stepper, live elapsed timer, problem
+  reporting, GPS breadcrumb recording, **offline queue** — actions taken in terminal
+  dead zones sync automatically (idempotent event UUIDs prevent duplicates).
+- **Backend**: full task state machine with server-side validation, SLA targets
+  (EU-regulation defaults: 20 min arrivals / 30 min departures, editable per task),
+  per-task results (stage timeline, estimate vs. actual, walked distance from GPS),
+  aggregate reports, and **self-learning route templates** — after 5 completed tasks
+  on a route, the "usual time" becomes the median of real actuals.
+
+## Project layout
+
+```
+server/   zero-dependency Node.js API (http + node:sqlite + SSE)
+web/      admin dashboard + agent PWA (vanilla ES modules, no build step)
+tests/    end-to-end API tests (node --test)
+docs/     research, product spec, data model, roadmap
+```
 
 ## Documentation
 

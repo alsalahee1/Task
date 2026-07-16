@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AeroAssist — Dispatch</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo">♿ Aero<span>Assist</span> <span class="muted small">dispatch</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="board" class="active">Live board</button>
+      <button data-tab="new">＋ New task</button>
+      <button data-tab="map">Map</button>
+      <button data-tab="templates">Time templates</button>
+      <button data-tab="reports">Reports</button>
+      <button data-tab="team">Team</button>
+    </nav>
+    <span class="muted small" id="whoami"></span>
+    <button id="logout">Sign out</button>
+  </div>
+  <main class="page" id="page"></main>
+  <div id="modalHost"></div>
+  <script type="module" src="/assets/admin.js"></script>
+</body>
+</html>

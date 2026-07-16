@@ -1,0 +1,12 @@
+{
+  "name": "AeroAssist Agent",
+  "short_name": "AeroAssist",
+  "description": "Airport wheelchair assistance task manager",
+  "start_url": "/agent",
+  "display": "standalone",
+  "background_color": "#0e1420",
+  "theme_color": "#0e1420",
+  "icons": [
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
