@@ -39,6 +39,14 @@ put the server behind any TLS reverse proxy for field use.
 
 ## What's implemented
 
+- **Light & dark theme**: every screen (login, dispatch dashboard, agent app) follows
+  the device's OS preference by default, with a one-tap toggle (sun/moon icon next to
+  the language switch) to override it explicitly per device — the choice is only
+  persisted once the user actually taps it, so an unvisited device keeps following
+  OS-level light/dark changes. All colors are CSS custom properties, so both themes
+  share one set of component rules; there is no separate light/dark markup to
+  maintain. The live map keeps its own dark "ops radar" look in both themes, the same
+  convention flight-tracking and ride-hailing apps use for live maps.
 - **Admin dashboard**: live task board with color-coded SLA countdowns (green → amber
   → red, updated every second via Server-Sent Events), task creation with
   auto-filled template estimates, agent assignment (multi-agent supported), live

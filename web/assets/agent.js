@@ -2,8 +2,10 @@
 // GPS breadcrumbs, and an offline-tolerant send queue.
 import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
 import { t, statusLabel, actionLabel, applyDir, langToggle } from '/assets/i18n.js';
+import { initTheme, themeToggle } from '/assets/theme.js';
 
 applyDir();
+initTheme();
 const i18nT = t;
 
 const me = API.requireRole('AGENT');
@@ -164,6 +166,7 @@ function renderHome() {
     <div class="row spread" style="margin-bottom:6px">
       <img src="/assets/brand-logo.svg" alt="dnata" style="height:24px">
       <span class="grow"></span>
+      <span id="themeHost"></span>
       <span id="langHost"></span>
       <button id="logout" class="small">${t('sign_out')}</button>
     </div>
@@ -198,6 +201,7 @@ function renderHome() {
       </div>`).join('') ||
       `<div class="card muted" style="text-align:center; padding:32px">${i18nT('no_tasks')}<br>${i18nT('tasks_appear')}</div>`}
   `;
+  themeToggle(document.getElementById('themeHost'));
   langToggle(document.getElementById('langHost'));
   document.getElementById('logout').onclick = () => API.logout();
   document.getElementById('shiftBtn').onclick = async () => {
@@ -232,7 +236,7 @@ function renderTask() {
         <span class="badge">${esc(t.ssr_code)} · ${esc(t.wheelchair_type)}</span>
       </div>
       <h2 style="margin:10px 0 0">${esc(t.passenger_name)}</h2>
-      ${t.passenger_notes ? `<p class="small" style="color:#fcd34d; margin:6px 0 0">📝 ${esc(t.passenger_notes)}</p>` : ''}
+      ${t.passenger_notes ? `<p class="small" style="color:var(--warning-fg); margin:6px 0 0">📝 ${esc(t.passenger_notes)}</p>` : ''}
       ${stepper(t)}
       <div class="stage-chip" style="font-size:14px">● ${statusLabel(t.status)}</div>
       <div class="big-timer" id="elapsed" data-since="${since}">--:--</div>

@@ -2,11 +2,14 @@
 import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
 import { renderMap, initMap, floorplanFor } from '/assets/map.js';
 import { t as tr, statusLabel, applyDir, langToggle } from '/assets/i18n.js';
+import { initTheme, themeToggle } from '/assets/theme.js';
 
 applyDir();
+initTheme();
 const user = API.requireRole('ADMIN');
 document.getElementById('whoami').textContent = user.name;
 document.getElementById('logout').onclick = () => API.logout();
+themeToggle(document.getElementById('themeHost'));
 langToggle(document.getElementById('langHost'));
 document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
 
@@ -156,7 +159,7 @@ async function openTask(id) {
       <span class="badge">${statusLabel(t.status)}</span>
       ${slaPill(t)}
     </div>
-    ${t.passenger_notes ? `<p class="small" style="color:#fcd34d">📝 ${esc(t.passenger_notes)}</p>` : ''}
+    ${t.passenger_notes ? `<p class="small" style="color:var(--warning-fg)">📝 ${esc(t.passenger_notes)}</p>` : ''}
 
     <div class="row mt" style="align-items:flex-start">
       <div class="grow" style="min-width:280px">
@@ -172,7 +175,7 @@ async function openTask(id) {
           <div class="ev ${['PROBLEM_REPORTED', 'ESCALATED', 'GATE_CHANGED'].includes(ev.type) ? 'problem' : ''}">
             <b>${statusLabel(ev.type)}</b>
             <span class="muted small">${fmtTime(ev.server_time)} · ${esc(ev.agent_name || 'system')}</span>
-            ${ev.note ? `<div class="small" style="color:#fcd34d">${esc(ev.note)}</div>` : ''}
+            ${ev.note ? `<div class="small" style="color:var(--warning-fg)">${esc(ev.note)}</div>` : ''}
           </div>`).join('') || '<div class="muted small">No events yet</div>'}
         </div>
 
@@ -207,7 +210,7 @@ async function openTask(id) {
             <button class="danger" id="cancelBtn">${tr('cancel_task')}</button>
           </div>
           <button class="mt" style="width:100%" id="autoAssignBtn">${tr('auto_assign')}</button>
-          ${onDuty.length === 0 ? '<p class="small" style="color:#fcd34d">No agents on duty right now.</p>' : ''}
+          ${onDuty.length === 0 ? '<p class="small" style="color:var(--warning-fg)">No agents on duty right now.</p>' : ''}
         ` : ''}
       </div>
     </div>

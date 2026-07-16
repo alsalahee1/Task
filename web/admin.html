@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AeroAssist — Dispatch</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('aero_theme');
+      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <link rel="stylesheet" href="/assets/app.css">
   <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
@@ -23,6 +30,7 @@
       <button data-tab="team" data-i18n="tab_team">Team</button>
     </nav>
     <span class="muted small" id="whoami"></span>
+    <span id="themeHost"></span>
     <span id="langHost"></span>
     <button id="logout" data-i18n="sign_out">Sign out</button>
   </div>

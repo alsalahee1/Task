@@ -4,6 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AeroAssist — Sign in</title>
+  <script>
+    // Set the theme attribute before first paint so there is no flash of
+    // the wrong theme. Kept tiny and inline on purpose.
+    (function () {
+      var t = localStorage.getItem('aero_theme');
+      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <link rel="stylesheet" href="/assets/app.css">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
@@ -24,7 +33,10 @@
         <div id="error" style="color:var(--red); margin-top:10px; display:none; font-weight:600"></div>
         <button class="primary" style="width:100%; margin-top:18px; padding:13px" type="submit" id="btnLogin">Sign in</button>
       </form>
-      <div style="text-align:center; margin-top:12px" id="langHost"></div>
+      <div class="row" style="justify-content:center; margin-top:12px">
+        <span id="langHost"></span>
+        <span id="themeHost"></span>
+      </div>
       <div class="muted small" style="margin-top:16px; text-align:center">
         Demo accounts — admin: <b>admin/admin123</b> · agent: <b>ahmed/agent123</b>
       </div>
@@ -37,8 +49,11 @@
   <script type="module">
     import { API } from '/assets/api.js';
     import { t, applyDir, langToggle } from '/assets/i18n.js';
+    import { initTheme, themeToggle } from '/assets/theme.js';
     applyDir();
+    initTheme();
     langToggle(document.getElementById('langHost'));
+    themeToggle(document.getElementById('themeHost'));
     document.getElementById('tagline').textContent = t('tagline');
     document.getElementById('lblUser').textContent = t('username');
     document.getElementById('lblPass').textContent = t('password');
