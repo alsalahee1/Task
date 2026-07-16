@@ -1,0 +1,26 @@
+{
+  "_comment": "Example real-airport import. Replace with your own locations. Get lat/lng by right-clicking each point in Google Maps (satellite view) and copying the coordinates. POST this to /api/locations/import as admin, or paste it into Admin → Locations → Import. Existing codes are updated in place; the map projection is refitted to your airport automatically when all locations carry lat/lng.",
+
+  "locations": [
+    { "code": "A1",  "name": "Gate A1",              "type": "GATE",          "terminal": "T1", "lat": 25.24851, "lng": 55.35262 },
+    { "code": "A2",  "name": "Gate A2",              "type": "GATE",          "terminal": "T1", "lat": 25.24902, "lng": 55.35330 },
+    { "code": "B1",  "name": "Gate B1",              "type": "GATE",          "terminal": "T1", "lat": 25.24980, "lng": 55.35480 },
+    { "code": "CK1", "name": "Check-in Hall T1",     "type": "CHECKIN",       "terminal": "T1", "lat": 25.24700, "lng": 55.35200 },
+    { "code": "S1",  "name": "Wheelchair Storage A", "type": "STORAGE",       "terminal": "T1", "lat": 25.24760, "lng": 55.35250 },
+    { "code": "BG1", "name": "Baggage Claim T1",     "type": "BAGGAGE",       "terminal": "T1", "lat": 25.24680, "lng": 55.35300 },
+    { "code": "TX1", "name": "Taxi Rank",            "type": "TAXI",          "terminal": "T1", "lat": 25.24650, "lng": 55.35350 },
+    { "code": "TD1", "name": "Transfer Desk",        "type": "TRANSFER_DESK", "terminal": "T1", "lat": 25.24800, "lng": 55.35400 }
+  ],
+
+  "_templates_comment": "Optional rough walking-time seeds in minutes (wheelchair pace). both_ways defaults to true (seeds A->B and B->A). You only need the main routes — the system replaces these with the median of real completed tasks after 5 samples per route.",
+
+  "templates": [
+    { "from": "S1",  "to": "A1",  "minutes": 6 },
+    { "from": "S1",  "to": "CK1", "minutes": 4 },
+    { "from": "A1",  "to": "BG1", "minutes": 10 },
+    { "from": "B1",  "to": "BG1", "minutes": 12 },
+    { "from": "CK1", "to": "A1",  "minutes": 11 },
+    { "from": "CK1", "to": "B1",  "minutes": 13 },
+    { "from": "BG1", "to": "TX1", "minutes": 5 }
+  ]
+}

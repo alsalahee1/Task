@@ -21,6 +21,25 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   const now = () => new Date().toISOString();
   const notifier = createNotifier(db);
 
+  // ---------- settings & map projection ----------
+  const getSetting = k => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(k);
+    return row ? JSON.parse(row.value) : null;
+  };
+  const setSetting = (k, v) => db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(k, JSON.stringify(v));
+
+  // Linear GPS↔map transform: x = ax·lng + bx, y = ay·lat + by (map is 1000×600).
+  // Defaults match the demo seed; a real-airport import refits these from the data.
+  const DEFAULT_MAP_REF = {
+    ax: 1e5, bx: -5536000, ay: -1e5, by: 2525600, meters_per_unit: 1,
+  };
+  let mapRef = getSetting('map_ref');
+  if (!mapRef) { mapRef = DEFAULT_MAP_REF; setSetting('map_ref', mapRef); }
+  const llToXy = (lat, lng) => ({ x: mapRef.ax * lng + mapRef.bx, y: mapRef.ay * lat + mapRef.by });
+  const xyToLl = (x, y) => ({ lng: (x - mapRef.bx) / mapRef.ax, lat: (y - mapRef.by) / mapRef.ay });
+
   // ---------- live updates (Server-Sent Events) ----------
   const sseClients = new Set(); // { res, user }
   function broadcast(event, payload, { agentIds = null } = {}) {
@@ -53,8 +72,8 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     if (tpl) return { minutes: tpl.est_minutes, source: tpl.manually_set ? 'template' : 'learned' };
     const a = getLoc.get(fromId), b = getLoc.get(toId);
     if (!a || !b) return null;
-    const dist = Math.hypot(a.x - b.x, a.y - b.y); // map units ≈ meters
-    return { minutes: Math.max(2, Math.round(dist / WALK_METERS_PER_MIN)), source: 'distance' };
+    const meters = Math.hypot(a.x - b.x, a.y - b.y) * (mapRef.meters_per_unit || 1);
+    return { minutes: Math.max(2, Math.round(meters / WALK_METERS_PER_MIN)), source: 'distance' };
   }
 
   function estimateTask(storageId, pickupId, destinationId) {
@@ -467,18 +486,126 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   route('GET', /^\/api\/locations$/, ['ADMIN', 'AGENT'], (req, res) =>
     json(res, 200, db.prepare('SELECT * FROM locations ORDER BY type, code').all()));
 
+  route('GET', /^\/api\/config$/, ['ADMIN', 'AGENT'], (req, res) =>
+    json(res, 200, { map_ref: mapRef }));
+
   route('POST', /^\/api\/locations$/, ['ADMIN'], (req, res, m, body) => {
-    const { code, name, type, x, y } = body;
-    if (!code || !name || !type || typeof x !== 'number' || typeof y !== 'number')
-      return err(res, 400, 'code, name, type, x, y required');
-    const { lat, lng } = { lat: 25.256 - y / 1e5, lng: 55.36 + x / 1e5 };
+    const { code, name, type } = body;
+    if (!code || !name || !type) return err(res, 400, 'code, name, type required');
+    // Accept either real GPS (lat/lng) or map coordinates (x/y); derive the other.
+    let { x, y, lat, lng } = body;
+    if (typeof lat === 'number' && typeof lng === 'number') ({ x, y } = llToXy(lat, lng));
+    else if (typeof x === 'number' && typeof y === 'number') ({ lat, lng } = xyToLl(x, y));
+    else return err(res, 400, 'either lat+lng or x+y required');
     try {
       const r = db.prepare(
         `INSERT INTO locations (code, name, type, terminal, x, y, lat, lng)
          VALUES (?,?,?,?,?,?,?,?)`)
-        .run(code, name, type, body.terminal || 'T1', x, y, lat, lng);
+        .run(code.toUpperCase(), name, type, body.terminal || 'T1', x, y, lat, lng);
       json(res, 201, getLoc.get(r.lastInsertRowid));
     } catch { err(res, 409, 'Location code already exists'); }
+  });
+
+  // Bulk import of the real airport: locations with GPS coordinates (+ optional
+  // seed walking times). When every location has lat/lng, the map projection is
+  // refitted so the whole airport fills the map view, and meters_per_unit is set
+  // so distance-based estimates stay honest.
+  route('POST', /^\/api\/locations\/import$/, ['ADMIN'], (req, res, m, body) => {
+    const locs = Array.isArray(body.locations) ? body.locations : [];
+    if (!locs.length) return err(res, 400, 'locations[] required');
+    for (const l of locs) {
+      if (!l.code || !l.name || !l.type)
+        return err(res, 400, 'every location needs code, name, type');
+      const hasLl = typeof l.lat === 'number' && typeof l.lng === 'number';
+      const hasXy = typeof l.x === 'number' && typeof l.y === 'number';
+      if (!hasLl && !hasXy)
+        return err(res, 400, `location ${l.code}: needs lat+lng (or x+y)`);
+    }
+
+    const allGps = locs.every(l => typeof l.lat === 'number' && typeof l.lng === 'number');
+    if (allGps && body.fit_map !== false) {
+      // Refit projection: bounding box of the airport → map box [50..950]×[60..540].
+      const lats = locs.map(l => l.lat), lngs = locs.map(l => l.lng);
+      const latMin = Math.min(...lats), latMax = Math.max(...lats);
+      const lngMin = Math.min(...lngs), lngMax = Math.max(...lngs);
+      const latSpan = Math.max(latMax - latMin, 0.0005);
+      const lngSpan = Math.max(lngMax - lngMin, 0.0005);
+      const ax = 900 / lngSpan, ay = -480 / latSpan;
+      const midLat = (latMin + latMax) / 2;
+      const widthMeters = lngSpan * 111320 * Math.cos((midLat * Math.PI) / 180);
+      const heightMeters = latSpan * 111320;
+      mapRef = {
+        ax, bx: 50 - ax * lngMin,
+        ay, by: 60 - ay * latMax,
+        meters_per_unit: Math.round(((widthMeters / 900 + heightMeters / 480) / 2) * 1000) / 1000,
+      };
+      setSetting('map_ref', mapRef);
+      // Re-project every existing location's stored GPS onto the new map.
+      for (const ex of db.prepare('SELECT id, lat, lng FROM locations').all()) {
+        const { x, y } = llToXy(ex.lat, ex.lng);
+        db.prepare('UPDATE locations SET x = ?, y = ? WHERE id = ?').run(x, y, ex.id);
+      }
+    }
+
+    // replace: true — remove locations not in this import, unless referenced by
+    // history (tasks/templates/chairs keep their locations for reporting integrity).
+    let removed = 0;
+    if (body.replace) {
+      const keep = new Set(locs.map(l => l.code.toUpperCase()));
+      for (const ex of db.prepare('SELECT id, code FROM locations').all()) {
+        if (keep.has(ex.code.toUpperCase())) continue;
+        const used = db.prepare(
+          `SELECT (SELECT COUNT(*) FROM tasks WHERE storage_id = $id OR pickup_id = $id OR destination_id = $id)
+            + (SELECT COUNT(*) FROM wheelchairs WHERE home_storage_id = $id OR current_location_id = $id)
+            + (SELECT COUNT(*) FROM flights WHERE gate_id = $id) AS n`).get({ id: ex.id }).n;
+        if (used) continue;
+        db.prepare('DELETE FROM route_templates WHERE from_id = ? OR to_id = ?').run(ex.id, ex.id);
+        db.prepare('DELETE FROM locations WHERE id = ?').run(ex.id);
+        removed++;
+      }
+    }
+
+    const upsert = db.prepare(
+      `INSERT INTO locations (code, name, type, terminal, x, y, lat, lng)
+       VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(code) DO UPDATE SET name = excluded.name, type = excluded.type,
+         terminal = excluded.terminal, x = excluded.x, y = excluded.y,
+         lat = excluded.lat, lng = excluded.lng`);
+    let imported = 0;
+    for (const l of locs) {
+      let { x, y, lat, lng } = l;
+      if (typeof lat === 'number' && typeof lng === 'number') ({ x, y } = llToXy(lat, lng));
+      else ({ lat, lng } = xyToLl(x, y));
+      upsert.run(l.code.toUpperCase(), l.name, l.type, l.terminal || 'T1', x, y, lat, lng);
+      imported++;
+    }
+
+    // Optional walking-time seeds: { from, to, minutes, both_ways? }
+    let templatesUpserted = 0;
+    const locIdByCode = code => db.prepare(
+      'SELECT id FROM locations WHERE upper(code) = upper(?)').get(code)?.id;
+    for (const tRow of Array.isArray(body.templates) ? body.templates : []) {
+      const fromId = locIdByCode(tRow.from), toId = locIdByCode(tRow.to);
+      if (!fromId || !toId || !(tRow.minutes > 0)) continue;
+      const pairs = tRow.both_ways === false ? [[fromId, toId]] : [[fromId, toId], [toId, fromId]];
+      for (const [f, t2] of pairs) {
+        db.prepare(
+          `INSERT INTO route_templates (from_id, to_id, est_minutes, manually_set)
+           VALUES (?,?,?,1)
+           ON CONFLICT(from_id, to_id)
+           DO UPDATE SET est_minutes = excluded.est_minutes, manually_set = 1`)
+          .run(f, t2, tRow.minutes);
+        templatesUpserted++;
+      }
+    }
+
+    json(res, 200, {
+      imported_locations: imported,
+      removed_locations: removed,
+      seeded_templates: templatesUpserted,
+      map_refitted: allGps && body.fit_map !== false,
+      map_ref: mapRef,
+    });
   });
 
   // --- templates ---

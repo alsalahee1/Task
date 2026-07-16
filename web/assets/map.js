@@ -1,10 +1,23 @@
-// Schematic SVG airport map (1000x600 map units, ~1 unit = 1 m).
-// GPS lat/lng ↔ map x/y linear transform must match server/db.js MAP_REF.
-const REF = { lat0: 25.256, lng0: 55.36, scale: 1e5 };
-export const llToXy = (lat, lng) => ({
-  x: (lng - REF.lng0) * REF.scale,
-  y: (REF.lat0 - lat) * REF.scale,
-});
+// Schematic SVG airport map (1000x600 map units).
+// GPS lat/lng ↔ map x/y linear transform; fetched from /api/config at boot so it
+// always matches the server (which refits it when a real airport is imported).
+let REF = { ax: 1e5, bx: -5536000, ay: -1e5, by: 2525600 };
+let floorplanUrl = null;
+
+export const llToXy = (lat, lng) => ({ x: REF.ax * lng + REF.bx, y: REF.ay * lat + REF.by });
+
+// Call once at boot: syncs the projection and detects a real floor-plan image
+// (drop your terminal plan at web/assets/floorplan.png to replace the schematic).
+export async function initMap(api) {
+  try {
+    const cfg = await api.get('/api/config');
+    if (cfg.map_ref) REF = cfg.map_ref;
+  } catch { /* keep defaults */ }
+  try {
+    const head = await fetch('/assets/floorplan.png', { method: 'HEAD' });
+    if (head.ok) floorplanUrl = '/assets/floorplan.png';
+  } catch { /* no floor plan */ }
+}
 
 const TYPE_COLORS = {
   GATE: '#60a5fa', STORAGE: '#a78bfa', CHECKIN: '#34d399',
@@ -24,20 +37,26 @@ const esc = s => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;'
 export function renderMap(el, { locations = [], agents = [], routes = [], lines = [], highlight = [] } = {}) {
   const parts = [];
 
-  // terminal silhouette: two concourses + main hall
-  parts.push(`
-    <rect x="0" y="0" width="1000" height="600" fill="#0b1120"/>
-    <path d="M 30 130 L 30 60 Q 30 30 60 30 L 470 30 Q 490 30 490 55 L 490 130 Z"
-          fill="#131c2e" stroke="#233250" stroke-width="2"/>
-    <path d="M 510 130 L 510 55 Q 510 30 530 30 L 940 30 Q 970 30 970 60 L 970 130 Z"
-          fill="#131c2e" stroke="#233250" stroke-width="2"/>
-    <rect x="60" y="130" width="880" height="130" rx="10" fill="#111a2b" stroke="#233250" stroke-width="2"/>
-    <rect x="100" y="260" width="800" height="180" rx="10" fill="#131c2e" stroke="#233250" stroke-width="2"/>
-    <rect x="220" y="440" width="560" height="150" rx="10" fill="#111a2b" stroke="#233250" stroke-width="2"/>
-    <text x="500" y="205" fill="#31415e" font-size="26" font-weight="800" text-anchor="middle" letter-spacing="6">CONCOURSE WALKWAY</text>
-    <text x="500" y="360" fill="#31415e" font-size="22" font-weight="800" text-anchor="middle" letter-spacing="5">TERMINAL 1</text>
-    <text x="500" y="525" fill="#31415e" font-size="18" font-weight="800" text-anchor="middle" letter-spacing="4">ARRIVALS / LANDSIDE</text>
-  `);
+  parts.push(`<rect x="0" y="0" width="1000" height="600" fill="#0b1120"/>`);
+  if (floorplanUrl) {
+    // real terminal floor plan as background, dimmed to keep overlays readable
+    parts.push(`<image href="${floorplanUrl}" x="0" y="0" width="1000" height="600"
+      preserveAspectRatio="xMidYMid meet" opacity="0.45"/>`);
+  } else {
+    // generic terminal silhouette: two concourses + main hall
+    parts.push(`
+      <path d="M 30 130 L 30 60 Q 30 30 60 30 L 470 30 Q 490 30 490 55 L 490 130 Z"
+            fill="#131c2e" stroke="#233250" stroke-width="2"/>
+      <path d="M 510 130 L 510 55 Q 510 30 530 30 L 940 30 Q 970 30 970 60 L 970 130 Z"
+            fill="#131c2e" stroke="#233250" stroke-width="2"/>
+      <rect x="60" y="130" width="880" height="130" rx="10" fill="#111a2b" stroke="#233250" stroke-width="2"/>
+      <rect x="100" y="260" width="800" height="180" rx="10" fill="#131c2e" stroke="#233250" stroke-width="2"/>
+      <rect x="220" y="440" width="560" height="150" rx="10" fill="#111a2b" stroke="#233250" stroke-width="2"/>
+      <text x="500" y="205" fill="#31415e" font-size="26" font-weight="800" text-anchor="middle" letter-spacing="6">CONCOURSE WALKWAY</text>
+      <text x="500" y="360" fill="#31415e" font-size="22" font-weight="800" text-anchor="middle" letter-spacing="5">TERMINAL 1</text>
+      <text x="500" y="525" fill="#31415e" font-size="18" font-weight="800" text-anchor="middle" letter-spacing="4">ARRIVALS / LANDSIDE</text>
+    `);
+  }
 
   // planned straight legs (dashed)
   for (const l of lines) {
@@ -53,8 +72,10 @@ export function renderMap(el, { locations = [], agents = [], routes = [], lines 
       stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>`);
   }
 
-  // location dots
+  // location dots (skip anything projected outside the view, e.g. leftovers
+  // from a previous airport after a re-import)
   for (const loc of locations) {
+    if (loc.x < -20 || loc.x > 1020 || loc.y < -20 || loc.y > 620) continue;
     const c = TYPE_COLORS[loc.type] || TYPE_COLORS.OTHER;
     const hl = highlight.includes(loc.code);
     parts.push(`

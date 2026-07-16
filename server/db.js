@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS trackpoints (
   accuracy REAL,
   recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS wheelchairs (
   id INTEGER PRIMARY KEY,
   qr_code TEXT UNIQUE NOT NULL,

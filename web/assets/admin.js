@@ -1,6 +1,6 @@
 // Admin dispatcher dashboard.
 import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
-import { renderMap } from '/assets/map.js';
+import { renderMap, initMap } from '/assets/map.js';
 import { t as tr, statusLabel, applyDir, langToggle } from '/assets/i18n.js';
 
 applyDir();
@@ -82,8 +82,8 @@ const page = document.getElementById('page');
 
 function render() {
   ({ board, new: renderNew, map: renderMapTab, flights: renderFlights,
-     wheelchairs: renderWheelchairs, templates: renderTemplates,
-     reports: renderReports, team: renderTeam })[state.tab]();
+     wheelchairs: renderWheelchairs, locations: renderLocations,
+     templates: renderTemplates, reports: renderReports, team: renderTeam })[state.tab]();
 }
 
 // ---------- board ----------
@@ -607,6 +607,83 @@ function renderWheelchairs() {
   };
 }
 
+// ---------- locations (real-airport setup) ----------
+const LOC_TYPES = ['GATE', 'CHECKIN', 'STORAGE', 'BAGGAGE', 'TAXI', 'TRANSFER_DESK', 'OTHER'];
+
+function renderLocations() {
+  page.innerHTML = `
+    <div class="row" style="align-items:flex-start">
+      <div class="card grow" style="min-width:420px">
+        <h2>${tr('tab_locations')}</h2>
+        <table><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Terminal</th><th>GPS</th></tr></thead>
+        <tbody>
+          ${state.locations.map(l => `<tr>
+            <td><b>${esc(l.code)}</b></td><td>${esc(l.name)}</td>
+            <td><span class="badge">${esc(l.type)}</span></td><td>${esc(l.terminal)}</td>
+            <td class="muted small">${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}</td>
+          </tr>`).join('')}
+          <tr>
+            <td><input id="nlCode" placeholder="C12" style="width:70px"></td>
+            <td><input id="nlName" placeholder="Gate C12"></td>
+            <td><select id="nlType">${LOC_TYPES.map(t => `<option>${t}</option>`).join('')}</select></td>
+            <td><input id="nlTerm" placeholder="T1" style="width:60px" value="T1"></td>
+            <td class="row"><input id="nlLat" placeholder="lat" style="width:110px">
+              <input id="nlLng" placeholder="lng" style="width:110px">
+              <button class="primary" id="nlAdd">Add</button></td>
+          </tr>
+        </tbody></table>
+        <p class="muted small">Tip: right-click any point in Google Maps (satellite view) and copy the
+          coordinates shown — that is the lat/lng to paste here.</p>
+      </div>
+      <div class="card" style="width:480px; max-width:100%">
+        <h3>Import real airport (JSON)</h3>
+        <p class="small muted">Paste your full location list with real GPS coordinates.
+          The map is automatically refitted to your airport, and existing codes are updated
+          in place. Add <code>"replace": true</code> to also remove old demo locations
+          that are not referenced anywhere. Optional <code>templates</code> seed the walking times
+          (<code>both_ways</code> defaults to true). See
+          <code>setup/airport-import.example.json</code> in the repository.</p>
+        <textarea id="importJson" rows="14" spellcheck="false" style="font-family:monospace; font-size:12.5px"
+          placeholder='{\n  "locations": [\n    {"code": "A1", "name": "Gate A1", "type": "GATE", "lat": 25.24851, "lng": 55.35262}\n  ],\n  "templates": [\n    {"from": "A1", "to": "BG1", "minutes": 12}\n  ]\n}'></textarea>
+        <button class="primary mt" style="width:100%" id="importBtn">Import</button>
+        <div class="small muted mt" id="importResult"></div>
+      </div>
+    </div>`;
+
+  document.getElementById('nlAdd').onclick = async () => {
+    try {
+      await API.post('/api/locations', {
+        code: document.getElementById('nlCode').value.trim(),
+        name: document.getElementById('nlName').value.trim(),
+        type: document.getElementById('nlType').value,
+        terminal: document.getElementById('nlTerm').value.trim() || 'T1',
+        lat: Number(document.getElementById('nlLat').value),
+        lng: Number(document.getElementById('nlLng').value),
+      });
+      state.locations = await API.get('/api/locations');
+      toast('Location added');
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+
+  document.getElementById('importBtn').onclick = async () => {
+    let body;
+    try { body = JSON.parse(document.getElementById('importJson').value); }
+    catch { return toast('Invalid JSON — check the format', true); }
+    try {
+      const r = await API.post('/api/locations/import', body);
+      document.getElementById('importResult').innerHTML =
+        `✅ ${r.imported_locations} locations imported · ${r.seeded_templates} walking times seeded` +
+        (r.removed_locations ? ` · ${r.removed_locations} old locations removed` : '') +
+        (r.map_refitted ? ' · map projection refitted to your airport' : '');
+      state.locations = await API.get('/api/locations');
+      state.templates = await API.get('/api/templates');
+      await initMap(API); // pick up the refitted projection
+      toast('Airport imported');
+    } catch (ex) { toast(ex.message, true); }
+  };
+}
+
 // ---------- templates ----------
 function renderTemplates() {
   page.innerHTML = `<div class="card">
@@ -735,5 +812,5 @@ function renderTeam() {
 }
 
 // ---------- boot ----------
-await loadAll();
+await Promise.all([loadAll(), initMap(API)]);
 render();
