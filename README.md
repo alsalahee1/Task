@@ -94,7 +94,7 @@ docs/     research, product spec, data model, roadmap
 | [docs/02-product-spec.md](docs/02-product-spec.md) | The improved app concept: roles, full task lifecycle, timers, GPS tracking, time templates, reports |
 | [docs/03-data-model.md](docs/03-data-model.md) | Database entities, task state machine, and API outline |
 | [docs/04-mvp-roadmap.md](docs/04-mvp-roadmap.md) | Recommended tech stack and a phased build plan (MVP first) |
-| [docs/05-real-airport-setup.md](docs/05-real-airport-setup.md) | **How to load your real airport**: locations with GPS, map refit, floor plan, and true walking times |
+| [docs/05-real-airport-setup.md](docs/05-real-airport-setup.md) | **How to load your real airport**: locations with GPS, map refit, floor plans, true walking times — incl. a DXB T1/T2/T3 quickstart (`node setup/load-dxb.mjs`) |
 
 ## The core idea (improved)
 

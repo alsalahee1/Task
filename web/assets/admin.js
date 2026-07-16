@@ -1,6 +1,6 @@
 // Admin dispatcher dashboard.
 import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
-import { renderMap, initMap } from '/assets/map.js';
+import { renderMap, initMap, floorplanFor } from '/assets/map.js';
 import { t as tr, statusLabel, applyDir, langToggle } from '/assets/i18n.js';
 
 applyDir();
@@ -20,6 +20,7 @@ const state = {
   flights: [],
   wheelchairs: [],
   summary: null,
+  mapTerminal: '',   // '' = whole airport
   reportRange: { from: today(), to: today() },
 };
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -405,11 +406,45 @@ function renderNew() {
 }
 
 // ---------- map tab ----------
+function terminals() {
+  return [...new Set(state.locations.map(l => l.terminal))].sort();
+}
+
 async function renderMapTab() {
-  page.innerHTML = `<div class="map-wrap" id="bigMap"></div>
-    <p class="muted small mt">🟢 agents on duty · dashed lines = planned legs of active tasks · solid green = recorded GPS routes</p>`;
+  const terms = terminals();
+  page.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <button class="${state.mapTerminal === '' ? 'primary' : ''}" data-map-term="">${tr('all_terminals')}</button>
+      ${terms.map(t2 => `<button class="${state.mapTerminal === t2 ? 'primary' : ''}"
+        data-map-term="${esc(t2)}">${esc(t2)}</button>`).join('')}
+    </div>
+    <div class="map-wrap" id="bigMap"></div>
+    <p class="muted small mt">🟢 agents on duty · dashed lines = planned legs of active tasks · solid green = recorded GPS routes
+      ${floorplanFor(state.mapTerminal) ? '' : ' · drop a floor-plan image at <code>web/assets/floorplan' +
+        (state.mapTerminal ? '-' + esc(state.mapTerminal) : '') + '.png</code> to use it as this view\'s background'}</p>`;
+
+  page.querySelectorAll('[data-map-term]').forEach(b => b.onclick = () => {
+    state.mapTerminal = b.dataset.mapTerm;
+    renderMapTab();
+  });
+
+  const term = state.mapTerminal;
+  const locs = term ? state.locations.filter(l => l.terminal === term) : state.locations;
+
+  // per-terminal view: zoom the viewport to that terminal's locations
+  let viewport = null;
+  if (term && locs.length) {
+    const xs = locs.map(l => l.x), ys = locs.map(l => l.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const padX = Math.max((maxX - minX) * 0.15, 30), padY = Math.max((maxY - minY) * 0.15, 30);
+    viewport = { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
+  }
+
+  const codes = new Set(locs.map(l => l.code));
   const active = [...state.tasks.values()]
-    .filter(t => !['COMPLETED', 'CANCELLED', 'CREATED'].includes(t.status));
+    .filter(t => !['COMPLETED', 'CANCELLED', 'CREATED'].includes(t.status))
+    .filter(t => !term || codes.has(t.pickup?.code) || codes.has(t.destination?.code));
   const details = await Promise.all(active.slice(0, 12).map(t => API.get(`/api/tasks/${t.id}`)));
   const lines = [], routes = [], highlight = [];
   for (const t of details) {
@@ -419,9 +454,11 @@ async function renderMapTab() {
     if (t.trackpoints?.length) routes.push({ points: t.trackpoints, color: '#22c55e' });
   }
   renderMap(document.getElementById('bigMap'), {
-    locations: state.locations,
+    locations: locs,
     agents: state.agents.filter(a => a.on_duty),
     lines, routes, highlight,
+    viewport,
+    floorplan: floorplanFor(term),
   });
 }
 
@@ -812,5 +849,6 @@ function renderTeam() {
 }
 
 // ---------- boot ----------
-await Promise.all([loadAll(), initMap(API)]);
+await loadAll();
+await initMap(API, terminals());
 render();

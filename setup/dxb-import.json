@@ -1,0 +1,512 @@
+{
+  "_comment": "Dubai International (DXB) Terminals 1, 2, 3 \u2014 starter import. COORDINATES ARE APPROXIMATE placeholders laid out along the real airport axis; verify each one in 2 minutes via Google Maps satellite view (right-click \u2192 copy coordinates) before live use, then re-import \u2014 codes update in place. Walking-time seeds are rough estimates at wheelchair pace incl. distances of Concourse B; the system replaces them with measured medians after 5 real tasks per route.",
+  "replace": true,
+  "locations": [
+    {
+      "code": "B1",
+      "name": "Gate B1 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2495,
+      "lng": 55.3548
+    },
+    {
+      "code": "B2",
+      "name": "Gate B2 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2492,
+      "lng": 55.35552
+    },
+    {
+      "code": "B3",
+      "name": "Gate B3 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2489,
+      "lng": 55.35624
+    },
+    {
+      "code": "B4",
+      "name": "Gate B4 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2486,
+      "lng": 55.35696
+    },
+    {
+      "code": "B5",
+      "name": "Gate B5 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2483,
+      "lng": 55.35768
+    },
+    {
+      "code": "B6",
+      "name": "Gate B6 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.248,
+      "lng": 55.3584
+    },
+    {
+      "code": "B7",
+      "name": "Gate B7 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2477,
+      "lng": 55.35912
+    },
+    {
+      "code": "B8",
+      "name": "Gate B8 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2474,
+      "lng": 55.35984
+    },
+    {
+      "code": "B9",
+      "name": "Gate B9 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2471,
+      "lng": 55.36056
+    },
+    {
+      "code": "B10",
+      "name": "Gate B10 (Concourse B)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2468,
+      "lng": 55.36128
+    },
+    {
+      "code": "A1",
+      "name": "Gate A1 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2428,
+      "lng": 55.346
+    },
+    {
+      "code": "A2",
+      "name": "Gate A2 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2425,
+      "lng": 55.34672
+    },
+    {
+      "code": "A3",
+      "name": "Gate A3 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2422,
+      "lng": 55.34744
+    },
+    {
+      "code": "A4",
+      "name": "Gate A4 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2419,
+      "lng": 55.34816
+    },
+    {
+      "code": "A5",
+      "name": "Gate A5 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2416,
+      "lng": 55.34888
+    },
+    {
+      "code": "A6",
+      "name": "Gate A6 (Concourse A)",
+      "type": "GATE",
+      "terminal": "T3",
+      "lat": 25.2413,
+      "lng": 55.3496
+    },
+    {
+      "code": "CK3",
+      "name": "T3 Check-in Hall",
+      "type": "CHECKIN",
+      "terminal": "T3",
+      "lat": 25.245,
+      "lng": 55.363
+    },
+    {
+      "code": "BG3",
+      "name": "T3 Baggage Claim",
+      "type": "BAGGAGE",
+      "terminal": "T3",
+      "lat": 25.2445,
+      "lng": 55.3642
+    },
+    {
+      "code": "TX3",
+      "name": "T3 Taxi & Pickup",
+      "type": "TAXI",
+      "terminal": "T3",
+      "lat": 25.244,
+      "lng": 55.3653
+    },
+    {
+      "code": "S1",
+      "name": "Wheelchair Storage \u2014 Concourse B",
+      "type": "STORAGE",
+      "terminal": "T3",
+      "lat": 25.2482,
+      "lng": 55.3576
+    },
+    {
+      "code": "TD1",
+      "name": "T3 Transfer Desk",
+      "type": "TRANSFER_DESK",
+      "terminal": "T3",
+      "lat": 25.247,
+      "lng": 55.36
+    },
+    {
+      "code": "D1",
+      "name": "Gate D1 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.2565,
+      "lng": 55.362
+    },
+    {
+      "code": "D2",
+      "name": "Gate D2 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.25625,
+      "lng": 55.36255
+    },
+    {
+      "code": "D3",
+      "name": "Gate D3 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.256,
+      "lng": 55.3631
+    },
+    {
+      "code": "D4",
+      "name": "Gate D4 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.25575,
+      "lng": 55.36365
+    },
+    {
+      "code": "D5",
+      "name": "Gate D5 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.2555,
+      "lng": 55.3642
+    },
+    {
+      "code": "D6",
+      "name": "Gate D6 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.25525,
+      "lng": 55.36475
+    },
+    {
+      "code": "D7",
+      "name": "Gate D7 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.255,
+      "lng": 55.3653
+    },
+    {
+      "code": "D8",
+      "name": "Gate D8 (Concourse D)",
+      "type": "GATE",
+      "terminal": "T1",
+      "lat": 25.25475,
+      "lng": 55.36585
+    },
+    {
+      "code": "CK1",
+      "name": "T1 Check-in Hall",
+      "type": "CHECKIN",
+      "terminal": "T1",
+      "lat": 25.2525,
+      "lng": 55.3705
+    },
+    {
+      "code": "BG1",
+      "name": "T1 Baggage Claim",
+      "type": "BAGGAGE",
+      "terminal": "T1",
+      "lat": 25.252,
+      "lng": 55.3716
+    },
+    {
+      "code": "TX1",
+      "name": "T1 Taxi & Pickup",
+      "type": "TAXI",
+      "terminal": "T1",
+      "lat": 25.2515,
+      "lng": 55.3726
+    },
+    {
+      "code": "S2",
+      "name": "Wheelchair Storage \u2014 Concourse D",
+      "type": "STORAGE",
+      "terminal": "T1",
+      "lat": 25.2556,
+      "lng": 55.3642
+    },
+    {
+      "code": "F1",
+      "name": "Gate F1 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.3515
+    },
+    {
+      "code": "F2",
+      "name": "Gate F2 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.35195
+    },
+    {
+      "code": "F3",
+      "name": "Gate F3 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.3524
+    },
+    {
+      "code": "F4",
+      "name": "Gate F4 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.35285
+    },
+    {
+      "code": "F5",
+      "name": "Gate F5 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.3533
+    },
+    {
+      "code": "F6",
+      "name": "Gate F6 (Terminal 2)",
+      "type": "GATE",
+      "terminal": "T2",
+      "lat": 25.2625,
+      "lng": 55.35375
+    },
+    {
+      "code": "CK2",
+      "name": "T2 Check-in Hall",
+      "type": "CHECKIN",
+      "terminal": "T2",
+      "lat": 25.2635,
+      "lng": 55.3523
+    },
+    {
+      "code": "BG2",
+      "name": "T2 Baggage Claim",
+      "type": "BAGGAGE",
+      "terminal": "T2",
+      "lat": 25.2637,
+      "lng": 55.3533
+    },
+    {
+      "code": "TX2",
+      "name": "T2 Taxi & Pickup",
+      "type": "TAXI",
+      "terminal": "T2",
+      "lat": 25.264,
+      "lng": 55.354
+    },
+    {
+      "code": "S3",
+      "name": "Wheelchair Storage \u2014 T2",
+      "type": "STORAGE",
+      "terminal": "T2",
+      "lat": 25.263,
+      "lng": 55.3516
+    }
+  ],
+  "templates": [
+    {
+      "from": "S1",
+      "to": "B1",
+      "minutes": 6
+    },
+    {
+      "from": "S1",
+      "to": "B5",
+      "minutes": 9
+    },
+    {
+      "from": "S1",
+      "to": "B10",
+      "minutes": 14
+    },
+    {
+      "from": "CK3",
+      "to": "B1",
+      "minutes": 18
+    },
+    {
+      "from": "CK3",
+      "to": "B5",
+      "minutes": 14
+    },
+    {
+      "from": "CK3",
+      "to": "B10",
+      "minutes": 10
+    },
+    {
+      "from": "B1",
+      "to": "BG3",
+      "minutes": 16
+    },
+    {
+      "from": "B5",
+      "to": "BG3",
+      "minutes": 13
+    },
+    {
+      "from": "B10",
+      "to": "BG3",
+      "minutes": 9
+    },
+    {
+      "from": "A1",
+      "to": "BG3",
+      "minutes": 24
+    },
+    {
+      "from": "A3",
+      "to": "BG3",
+      "minutes": 22
+    },
+    {
+      "from": "CK3",
+      "to": "A1",
+      "minutes": 26
+    },
+    {
+      "from": "CK3",
+      "to": "A3",
+      "minutes": 24
+    },
+    {
+      "from": "S1",
+      "to": "A1",
+      "minutes": 18
+    },
+    {
+      "from": "S1",
+      "to": "A3",
+      "minutes": 16
+    },
+    {
+      "from": "BG3",
+      "to": "TX3",
+      "minutes": 4
+    },
+    {
+      "from": "TD1",
+      "to": "B5",
+      "minutes": 8
+    },
+    {
+      "from": "TD1",
+      "to": "A3",
+      "minutes": 18
+    },
+    {
+      "from": "S2",
+      "to": "D1",
+      "minutes": 4
+    },
+    {
+      "from": "S2",
+      "to": "D8",
+      "minutes": 8
+    },
+    {
+      "from": "CK1",
+      "to": "D1",
+      "minutes": 16
+    },
+    {
+      "from": "CK1",
+      "to": "D8",
+      "minutes": 12
+    },
+    {
+      "from": "D1",
+      "to": "BG1",
+      "minutes": 15
+    },
+    {
+      "from": "D8",
+      "to": "BG1",
+      "minutes": 11
+    },
+    {
+      "from": "BG1",
+      "to": "TX1",
+      "minutes": 3
+    },
+    {
+      "from": "S3",
+      "to": "F1",
+      "minutes": 2
+    },
+    {
+      "from": "S3",
+      "to": "F6",
+      "minutes": 4
+    },
+    {
+      "from": "CK2",
+      "to": "F1",
+      "minutes": 5
+    },
+    {
+      "from": "CK2",
+      "to": "F6",
+      "minutes": 7
+    },
+    {
+      "from": "F1",
+      "to": "BG2",
+      "minutes": 6
+    },
+    {
+      "from": "F6",
+      "to": "BG2",
+      "minutes": 8
+    },
+    {
+      "from": "BG2",
+      "to": "TX2",
+      "minutes": 2
+    }
+  ]
+}

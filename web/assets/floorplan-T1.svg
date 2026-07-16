@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="system-ui, sans-serif">
+  <!-- DXB Terminal 1 — schematic, not to scale. Original drawing based on the
+       publicly known layout (Concourse D linear pier, train link to the T1
+       building on the Al Garhoud side). Replace with the official plan at
+       web/assets/floorplan-T1.png when available. -->
+  <rect width="1000" height="600" fill="#0b1120"/>
+
+  <!-- Concourse D, upper left, NW→SE orientation -->
+  <g transform="rotate(10 330 150)">
+    <rect x="40" y="100" width="580" height="88" rx="40" fill="#152036" stroke="#2b3b5e" stroke-width="2.5"/>
+    <text x="330" y="155" fill="#3d5178" font-size="28" font-weight="800" text-anchor="middle" letter-spacing="8">CONCOURSE D</text>
+  </g>
+
+  <!-- Train link D ↔ T1 building -->
+  <line x1="560" y1="230" x2="740" y2="380" stroke="#22d3ee" stroke-width="4" stroke-dasharray="4 10" opacity="0.5"/>
+  <text x="660" y="290" fill="#22d3ee" font-size="14" font-weight="700" opacity="0.7" transform="rotate(40 660 290)">TRAIN</text>
+
+  <!-- T1 building, lower right -->
+  <g transform="rotate(10 800 460)">
+    <rect x="620" y="370" width="350" height="185" rx="18" fill="#111a2b" stroke="#2b3b5e" stroke-width="2.5"/>
+    <text x="795" y="435" fill="#3d5178" font-size="24" font-weight="800" text-anchor="middle" letter-spacing="4">TERMINAL 1</text>
+    <text x="795" y="465" fill="#31415e" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="3">CHECK-IN HALL</text>
+    <line x1="640" y1="485" x2="950" y2="485" stroke="#233250" stroke-width="2"/>
+    <text x="795" y="510" fill="#31415e" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="3">ARRIVALS · BAGGAGE · TAXI ▼</text>
+  </g>
+
+  <text x="16" y="586" fill="#31415e" font-size="12">DXB T1 — schematic, not to scale · replace with official plan (floorplan-T1.png)</text>
+</svg>

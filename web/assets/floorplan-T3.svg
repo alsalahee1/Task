@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="system-ui, sans-serif">
+  <!-- DXB Terminal 3 — schematic, not to scale. Original drawing based on the
+       publicly known layout (Concourse A satellite, Concourse B attached to the
+       T3 building, automated people mover link). Replace with the official plan
+       at web/assets/floorplan-T3.png when available. -->
+  <rect width="1000" height="600" fill="#0b1120"/>
+
+  <!-- Concourse B (attached), runs NW→SE across the upper map -->
+  <g transform="rotate(9 460 150)">
+    <rect x="120" y="105" width="680" height="90" rx="40" fill="#152036" stroke="#2b3b5e" stroke-width="2.5"/>
+    <text x="460" y="160" fill="#3d5178" font-size="30" font-weight="800" text-anchor="middle" letter-spacing="8">CONCOURSE B</text>
+  </g>
+
+  <!-- Concourse A (satellite), lower left, same orientation -->
+  <g transform="rotate(9 260 430)">
+    <rect x="30" y="390" width="460" height="80" rx="36" fill="#152036" stroke="#2b3b5e" stroke-width="2.5"/>
+    <text x="260" y="440" fill="#3d5178" font-size="26" font-weight="800" text-anchor="middle" letter-spacing="7">CONCOURSE A</text>
+  </g>
+
+  <!-- APM / train link between A and B -->
+  <line x1="330" y1="405" x2="430" y2="215" stroke="#22d3ee" stroke-width="4" stroke-dasharray="4 10" opacity="0.5"/>
+  <text x="415" y="320" fill="#22d3ee" font-size="14" font-weight="700" opacity="0.7" transform="rotate(-62 415 320)">TRAIN</text>
+
+  <!-- T3 main building: departures / arrivals halls, east side -->
+  <g transform="rotate(9 800 430)">
+    <rect x="620" y="330" width="340" height="200" rx="18" fill="#111a2b" stroke="#2b3b5e" stroke-width="2.5"/>
+    <text x="790" y="400" fill="#3d5178" font-size="24" font-weight="800" text-anchor="middle" letter-spacing="4">TERMINAL 3</text>
+    <text x="790" y="432" fill="#31415e" font-size="15" font-weight="700" text-anchor="middle" letter-spacing="3">CHECK-IN · EMIRATES</text>
+    <line x1="640" y1="455" x2="940" y2="455" stroke="#233250" stroke-width="2"/>
+    <text x="790" y="482" fill="#31415e" font-size="15" font-weight="700" text-anchor="middle" letter-spacing="3">ARRIVALS · BAGGAGE</text>
+    <text x="790" y="515" fill="#31415e" font-size="13" font-weight="700" text-anchor="middle" letter-spacing="3">TAXI / PICKUP ▼</text>
+  </g>
+
+  <text x="16" y="586" fill="#31415e" font-size="12">DXB T3 — schematic, not to scale · replace with official plan (floorplan-T3.png)</text>
+</svg>

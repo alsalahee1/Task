@@ -69,13 +69,40 @@ busiest routes (create real tasks, walk them properly, complete them). Five walk
 per route is enough to flip it to learned — you can have measured times for the top
 routes before the first real passenger.
 
+## DXB quickstart — Terminals 1, 2 and 3 preloaded
+
+For Dubai International there is a ready starter kit:
+
+```bash
+node setup/load-dxb.mjs        # server must be running; re-runnable
+```
+
+It imports **43 locations across T1 (Concourse D), T2, and T3 (Concourses A + B)**
+with 64 seeded walking times, refits the map, and installs schematic floor plans as
+the per-terminal map backgrounds. The Map tab gains **All terminals / T1 / T2 / T3**
+buttons; each terminal view zooms to that terminal with its plan behind the live
+dots, agents, and GPS routes.
+
+Two honest caveats:
+
+1. **Coordinates are approximate placeholders** laid out along the real airport
+   axis. Verify each one via Google Maps satellite view (right-click → copy
+   coordinates), edit `setup/dxb-import.json`, and re-run — codes update in place.
+2. **The floor plans are original schematics** (Concourse shapes, train links,
+   halls — drawn from the publicly known layout). The official Dubai Airports floor
+   plans are copyrighted, so they are not bundled; as airport staff you can obtain
+   them internally and simply save them over
+   `web/assets/floorplan-T1.png` / `-T2.png` / `-T3.png` — the map picks them up
+   automatically, no code changes.
+
 ## Optional — your terminal floor plan as the map background
 
 Export your terminal plan as an image (from CAD/PDF, roughly matching the
 proportions of your airport's bounding box) and save it as:
 
 ```
-web/assets/floorplan.png
+web/assets/floorplan.png          # whole-airport view
+web/assets/floorplan-T1.png       # per-terminal views (also .svg)
 ```
 
 The map automatically shows it (dimmed) behind the location dots, agents, and GPS

@@ -2,22 +2,29 @@
 // GPS lat/lng ↔ map x/y linear transform; fetched from /api/config at boot so it
 // always matches the server (which refits it when a real airport is imported).
 let REF = { ax: 1e5, bx: -5536000, ay: -1e5, by: 2525600 };
-let floorplanUrl = null;
+const floorplans = {}; // terminal code (or '' for whole airport) -> url
 
 export const llToXy = (lat, lng) => ({ x: REF.ax * lng + REF.bx, y: REF.ay * lat + REF.by });
 
-// Call once at boot: syncs the projection and detects a real floor-plan image
-// (drop your terminal plan at web/assets/floorplan.png to replace the schematic).
-export async function initMap(api) {
+async function detect(url) {
+  try { return (await fetch(url, { method: 'HEAD' })).ok ? url : null; } catch { return null; }
+}
+
+// Call once at boot: syncs the projection and detects floor-plan images.
+// Whole airport: web/assets/floorplan.png|svg — per terminal: floorplan-<T>.png|svg.
+export async function initMap(api, terminals = []) {
   try {
     const cfg = await api.get('/api/config');
     if (cfg.map_ref) REF = cfg.map_ref;
   } catch { /* keep defaults */ }
-  try {
-    const head = await fetch('/assets/floorplan.png', { method: 'HEAD' });
-    if (head.ok) floorplanUrl = '/assets/floorplan.png';
-  } catch { /* no floor plan */ }
+  const names = [['', 'floorplan'], ...terminals.map(t => [t, `floorplan-${t}`])];
+  await Promise.all(names.map(async ([key, base]) => {
+    const url = (await detect(`/assets/${base}.png`)) || (await detect(`/assets/${base}.svg`));
+    if (url) floorplans[key] = url;
+  }));
 }
+
+export const floorplanFor = terminal => floorplans[terminal || ''] || null;
 
 const TYPE_COLORS = {
   GATE: '#60a5fa', STORAGE: '#a78bfa', CHECKIN: '#34d399',
@@ -34,14 +41,36 @@ const esc = s => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;'
  *  lines:     [{ from:{x,y}, to:{x,y}, color }]                — planned straight legs
  *  highlight: [locationCode, ...]
  */
-export function renderMap(el, { locations = [], agents = [], routes = [], lines = [], highlight = [] } = {}) {
+/**
+ * Extra opts:
+ *  viewport:  {minX,minY,maxX,maxY} — zoom the view to this region of map space
+ *             (used for per-terminal views); aspect ratio is preserved.
+ *  floorplan: image url drawn over the viewport region as the background.
+ */
+export function renderMap(el, { locations = [], agents = [], routes = [], lines = [],
+  highlight = [], viewport = null, floorplan = null } = {}) {
   const parts = [];
 
+  // projection from map space to the 1000×600 view
+  let P = p => p, vpBox = { x: 0, y: 0, w: 1000, h: 600 };
+  if (viewport) {
+    const w = Math.max(viewport.maxX - viewport.minX, 1);
+    const h = Math.max(viewport.maxY - viewport.minY, 1);
+    const sc = Math.min(1000 / w, 600 / h);
+    const ox = (1000 - w * sc) / 2, oy = (600 - h * sc) / 2;
+    P = ({ x, y }) => ({ x: (x - viewport.minX) * sc + ox, y: (y - viewport.minY) * sc + oy });
+    vpBox = { x: ox, y: oy, w: w * sc, h: h * sc };
+  }
+  const proj = (x, y) => P({ x, y });
+
   parts.push(`<rect x="0" y="0" width="1000" height="600" fill="#0b1120"/>`);
-  if (floorplanUrl) {
-    // real terminal floor plan as background, dimmed to keep overlays readable
-    parts.push(`<image href="${floorplanUrl}" x="0" y="0" width="1000" height="600"
-      preserveAspectRatio="xMidYMid meet" opacity="0.45"/>`);
+  if (floorplan) {
+    // terminal floor plan as background, dimmed to keep overlays readable
+    parts.push(`<image href="${floorplan}" x="${vpBox.x}" y="${vpBox.y}"
+      width="${vpBox.w}" height="${vpBox.h}"
+      preserveAspectRatio="xMidYMid meet" opacity="0.55"/>`);
+  } else if (viewport) {
+    // zoomed view without a plan: plain background only
   } else {
     // generic terminal silhouette: two concourses + main hall
     parts.push(`
@@ -60,13 +89,15 @@ export function renderMap(el, { locations = [], agents = [], routes = [], lines 
 
   // planned straight legs (dashed)
   for (const l of lines) {
-    parts.push(`<line x1="${l.from.x}" y1="${l.from.y}" x2="${l.to.x}" y2="${l.to.y}"
+    const a = proj(l.from.x, l.from.y), b = proj(l.to.x, l.to.y);
+    parts.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"
       stroke="${l.color || '#3b82f6'}" stroke-width="3" stroke-dasharray="8 7" opacity="0.55"/>`);
   }
 
   // GPS breadcrumb polylines
   for (const r of routes) {
-    const pts = r.points.map(p => llToXy(p.lat, p.lng)).map(p => `${p.x},${p.y}`).join(' ');
+    const pts = r.points.map(p => llToXy(p.lat, p.lng)).map(p => P(p))
+      .map(p => `${p.x},${p.y}`).join(' ');
     if (!pts) continue;
     parts.push(`<polyline points="${pts}" fill="none" stroke="${r.color || '#22c55e'}"
       stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>`);
@@ -75,16 +106,17 @@ export function renderMap(el, { locations = [], agents = [], routes = [], lines 
   // location dots (skip anything projected outside the view, e.g. leftovers
   // from a previous airport after a re-import)
   for (const loc of locations) {
-    if (loc.x < -20 || loc.x > 1020 || loc.y < -20 || loc.y > 620) continue;
+    const { x, y } = proj(loc.x, loc.y);
+    if (x < -20 || x > 1020 || y < -20 || y > 620) continue;
     const c = TYPE_COLORS[loc.type] || TYPE_COLORS.OTHER;
     const hl = highlight.includes(loc.code);
     parts.push(`
       <g>
-        ${hl ? `<circle cx="${loc.x}" cy="${loc.y}" r="17" fill="none" stroke="${c}" stroke-width="2" opacity="0.7">
+        ${hl ? `<circle cx="${x}" cy="${y}" r="17" fill="none" stroke="${c}" stroke-width="2" opacity="0.7">
           <animate attributeName="r" values="12;20;12" dur="1.6s" repeatCount="indefinite"/>
         </circle>` : ''}
-        <circle cx="${loc.x}" cy="${loc.y}" r="${hl ? 9 : 7}" fill="${c}" stroke="#0b1120" stroke-width="2"/>
-        <text x="${loc.x}" y="${loc.y - 13}" fill="${hl ? c : '#7d8fae'}" font-size="13"
+        <circle cx="${x}" cy="${y}" r="${hl ? 9 : 7}" fill="${c}" stroke="#0b1120" stroke-width="2"/>
+        <text x="${x}" y="${y - 13}" fill="${hl ? c : '#7d8fae'}" font-size="13"
           font-weight="${hl ? 800 : 600}" text-anchor="middle">${esc(loc.code)}</text>
       </g>`);
   }
@@ -92,8 +124,8 @@ export function renderMap(el, { locations = [], agents = [], routes = [], lines 
   // agents
   for (const a of agents) {
     if (a.last_lat == null) continue;
-    const { x, y } = llToXy(a.last_lat, a.last_lng);
-    if (x < -20 || x > 1020 || y < -20 || y > 620) continue; // outside airport bounds
+    const { x, y } = P(llToXy(a.last_lat, a.last_lng));
+    if (x < -20 || x > 1020 || y < -20 || y > 620) continue; // outside this view
     const initials = esc((a.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase());
     parts.push(`
       <g>

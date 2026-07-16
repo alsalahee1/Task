@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="system-ui, sans-serif">
+  <!-- DXB Terminal 2 — schematic, not to scale. Original drawing based on the
+       publicly known layout (compact terminal on the north side, F gates with
+       mostly walk-out boarding). Replace with the official plan at
+       web/assets/floorplan-T2.png when available. -->
+  <rect width="1000" height="600" fill="#0b1120"/>
+
+  <!-- F gates row along the apron (top) -->
+  <rect x="80" y="90" width="840" height="80" rx="34" fill="#152036" stroke="#2b3b5e" stroke-width="2.5"/>
+  <text x="500" y="140" fill="#3d5178" font-size="26" font-weight="800" text-anchor="middle" letter-spacing="8">F GATES · WALK-OUT BOARDING</text>
+
+  <!-- Terminal building -->
+  <rect x="140" y="220" width="720" height="230" rx="18" fill="#111a2b" stroke="#2b3b5e" stroke-width="2.5"/>
+  <text x="500" y="300" fill="#3d5178" font-size="26" font-weight="800" text-anchor="middle" letter-spacing="5">TERMINAL 2</text>
+  <text x="500" y="335" fill="#31415e" font-size="15" font-weight="700" text-anchor="middle" letter-spacing="3">CHECK-IN · FLYDUBAI</text>
+  <line x1="170" y1="365" x2="830" y2="365" stroke="#233250" stroke-width="2"/>
+  <text x="500" y="395" fill="#31415e" font-size="15" font-weight="700" text-anchor="middle" letter-spacing="3">ARRIVALS · BAGGAGE</text>
+
+  <!-- Landside -->
+  <rect x="260" y="480" width="480" height="70" rx="14" fill="#131c2e" stroke="#233250" stroke-width="2"/>
+  <text x="500" y="522" fill="#31415e" font-size="15" font-weight="700" text-anchor="middle" letter-spacing="3">TAXI / PICKUP</text>
+
+  <text x="16" y="586" fill="#31415e" font-size="12">DXB T2 — schematic, not to scale · replace with official plan (floorplan-T2.png)</text>
+</svg>
