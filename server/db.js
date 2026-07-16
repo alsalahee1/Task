@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL,
   passenger_name TEXT NOT NULL,
+  passenger_phone TEXT,
   passenger_notes TEXT,
   ssr_code TEXT NOT NULL DEFAULT 'WCHR',
   wheelchair_type TEXT NOT NULL DEFAULT 'MANUAL',
@@ -105,6 +106,24 @@ CREATE TABLE IF NOT EXISTS trackpoints (
   lat REAL NOT NULL, lng REAL NOT NULL,
   accuracy REAL,
   recorded_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS flights (
+  id INTEGER PRIMARY KEY,
+  flight_number TEXT UNIQUE NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('ARRIVAL','DEPARTURE')),
+  sched_time TEXT,
+  gate_id INTEGER REFERENCES locations(id),
+  status TEXT NOT NULL DEFAULT 'ON_TIME'
+    CHECK (status IN ('ON_TIME','DELAYED','LANDED','BOARDING','DEPARTED','CANCELLED')),
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id),
+  phone TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'LOGGED',
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_track_task ON trackpoints(task_id);
@@ -157,8 +176,16 @@ export function openDb(path) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate(db);
   seed(db);
   return db;
+}
+
+// Additive migrations for databases created by earlier versions.
+function migrate(db) {
+  const cols = db.prepare('PRAGMA table_info(tasks)').all().map(c => c.name);
+  if (!cols.includes('passenger_phone'))
+    db.exec('ALTER TABLE tasks ADD COLUMN passenger_phone TEXT');
 }
 
 function seed(db) {
@@ -181,4 +208,17 @@ function seed(db) {
     'INSERT INTO route_templates (from_id, to_id, est_minutes) VALUES (?,?,?)');
   for (const [from, to, min] of SEED_TEMPLATES)
     insTpl.run(locId.get(from).id, locId.get(to).id, min);
+
+  // Demo flight schedule (stands in for the AODB/FIDS feed).
+  const insFlight = db.prepare(
+    `INSERT INTO flights (flight_number, direction, sched_time, gate_id, status, updated_at)
+     VALUES (?,?,?,?,?,?)`);
+  const inHours = h => new Date(Date.now() + h * 3600000).toISOString();
+  for (const [num, dir, hrs, gate, status] of [
+    ['EK202', 'ARRIVAL', 0.5, 'A3', 'ON_TIME'],
+    ['QR117', 'DEPARTURE', 2, 'B3', 'ON_TIME'],
+    ['BA106', 'ARRIVAL', 1, 'A1', 'DELAYED'],
+    ['LH630', 'DEPARTURE', 3, 'B5', 'ON_TIME'],
+    ['TK762', 'ARRIVAL', 1.5, 'B1', 'ON_TIME'],
+  ]) insFlight.run(num, dir, inHours(hrs), locId.get(gate).id, status, new Date().toISOString());
 }

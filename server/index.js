@@ -5,6 +5,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, verifyPassword } from './db.js';
+import { createNotifier } from './notify.js';
 import {
   nextStage, validateEvent, stagesFor, STAGE_ACTION_LABELS,
   TERMINAL_STATUSES, LOG_ONLY_EVENTS,
@@ -18,6 +19,7 @@ const WALK_METERS_PER_MIN = 55; // pushing a wheelchair; used only when no templ
 export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {}) {
   const db = openDb(dbPath);
   const now = () => new Date().toISOString();
+  const notifier = createNotifier(db);
 
   // ---------- live updates (Server-Sent Events) ----------
   const sseClients = new Set(); // { res, user }
@@ -112,6 +114,9 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       out.trackpoints = db.prepare(
         'SELECT lat, lng, accuracy, recorded_at FROM trackpoints WHERE task_id = ? ORDER BY id'
       ).all(task.id);
+      out.notifications = db.prepare(
+        'SELECT phone, message, status, created_at FROM notifications WHERE task_id = ? ORDER BY id'
+      ).all(task.id);
     }
     return out;
   }
@@ -174,6 +179,121 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     recordActual(task.pickup_id, task.destination_id, transit);
   }
 
+  // ---------- auto-assignment ----------
+  // Skill requirements implied by the request type.
+  const SKILL_BY_CHAIR = { CART: 'ELECTRIC_CART', AISLE: 'AISLE_CHAIR' };
+  const SKILL_BY_SSR = { WCHC: 'TWO_PERSON_LIFT' }; // fully immobile passenger
+
+  function requiredSkills(task) {
+    return [SKILL_BY_CHAIR[task.wheelchair_type], SKILL_BY_SSR[task.ssr_code]]
+      .filter(Boolean);
+  }
+
+  function agentActiveTaskCount(agentId) {
+    return db.prepare(
+      `SELECT COUNT(*) AS n FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+       WHERE ta.agent_id = ? AND t.status NOT IN ('COMPLETED','CANCELLED','CREATED')`)
+      .get(agentId).n;
+  }
+
+  // Pick the best agent: must be on duty and have the required skills;
+  // ranked by current workload first, then by distance to the task's start point.
+  function pickBestAgent(task) {
+    const start = getLoc.get(task.storage_id || task.pickup_id);
+    const needs = requiredSkills(task);
+    const candidates = db.prepare(
+      `SELECT * FROM users WHERE role = 'AGENT' AND on_duty = 1`).all()
+      .filter(a => {
+        const skills = JSON.parse(a.skills || '[]');
+        return needs.every(s => skills.includes(s));
+      })
+      .map(a => {
+        const distance = a.last_lat != null && start
+          ? Math.round(haversineMeters(
+              { lat: a.last_lat, lng: a.last_lng }, { lat: start.lat, lng: start.lng }))
+          : 800; // unknown position: assume "far side of the terminal"
+        const load = agentActiveTaskCount(a.id);
+        return { agent: a, distance_m: distance, active_tasks: load,
+          score: load * 1000 + distance };
+      })
+      .sort((x, y) => x.score - y.score);
+    return candidates[0] || null;
+  }
+
+  function autoAssign(task, byUser) {
+    const best = pickBestAgent(task);
+    if (!best) return null;
+    assign(task, [best.agent.id], byUser);
+    return {
+      agent: publicUser(best.agent),
+      distance_m: best.distance_m,
+      active_tasks: best.active_tasks,
+      required_skills: requiredSkills(task),
+    };
+  }
+
+  // ---------- flight feed ----------
+  function flightJson(f) {
+    return { ...f, gate: locBrief(f.gate_id) };
+  }
+
+  const getFlightByNumber = db.prepare(
+    'SELECT * FROM flights WHERE upper(flight_number) = upper(?)');
+
+  // A gate change from the feed retargets every active task on that flight:
+  // arrivals meet the passenger AT the gate (pickup moves), departures deliver
+  // the passenger TO the gate (destination moves). Tasks that already passed
+  // the affected point are left alone for the dispatcher to judge.
+  function applyFlightUpdate(flight, { gate_id, status, sched_time }, byUser) {
+    const oldGateId = flight.gate_id;
+    db.prepare(
+      `UPDATE flights SET gate_id = ?, status = ?, sched_time = ?, updated_at = ? WHERE id = ?`)
+      .run(gate_id ?? flight.gate_id, status || flight.status,
+        sched_time || flight.sched_time, now(), flight.id);
+    const updated = db.prepare('SELECT * FROM flights WHERE id = ?').get(flight.id);
+    broadcast('flight', flightJson(updated));
+
+    const gateChanged = gate_id && gate_id !== oldGateId;
+    if (!gateChanged) return { updated_tasks: [] };
+
+    const newGate = getLoc.get(gate_id);
+    const oldGate = oldGateId ? getLoc.get(oldGateId) : null;
+    const activeTasks = db.prepare(
+      `SELECT * FROM tasks WHERE upper(flight_number) = upper(?)
+       AND status NOT IN ('COMPLETED','CANCELLED')`).all(flight.flight_number);
+    const updatedTasks = [];
+
+    for (const t of activeTasks) {
+      const stages = stagesFor(t);
+      const idx = s => stages.indexOf(s);
+      const cur = t.status === 'CREATED' ? -1 : idx(t.status);
+      let field = null;
+      if (flight.direction === 'ARRIVAL' && t.pickup_id === oldGateId &&
+          cur < idx('ARRIVED_AT_PICKUP')) field = 'pickup_id';
+      if (flight.direction === 'DEPARTURE' && t.destination_id === oldGateId &&
+          cur < idx('PASSENGER_DELIVERED')) field = 'destination_id';
+      if (!field) continue;
+
+      db.prepare(`UPDATE tasks SET ${field} = ? WHERE id = ?`).run(gate_id, t.id);
+      const fresh = getTask(t.id);
+      const est = estimateTask(fresh.storage_id, fresh.pickup_id, fresh.destination_id);
+      db.prepare('UPDATE tasks SET template_est_minutes = ? WHERE id = ?')
+        .run(est.total_minutes, t.id);
+      db.prepare(
+        `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, note)
+         VALUES (?,?,?,?,?,?)`)
+        .run(randomUUID(), t.id, byUser?.id ?? null, 'GATE_CHANGED', now(),
+          `Flight ${flight.flight_number}: gate ${oldGate?.code || '?'} → ${newGate.code}; ` +
+          `${field === 'pickup_id' ? 'pickup' : 'destination'} updated automatically`);
+      if (fresh.passenger_phone) notifier.send(t.id, fresh.passenger_phone,
+        `AeroAssist: flight ${flight.flight_number} gate changed to ${newGate.code}. ` +
+        `Your assistance has been updated automatically.`);
+      pushTaskUpdate(t.id);
+      updatedTasks.push(t.id);
+    }
+    return { updated_tasks: updatedTasks };
+  }
+
   // ---------- geo ----------
   function haversineMeters(a, b) {
     const R = 6371000, toRad = d => (d * Math.PI) / 180;
@@ -194,7 +314,8 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   // ---------- report ----------
   function taskReport(task) {
     const events = taskEvents(task.id);
-    const stageEvents = events.filter(e => !LOG_ONLY_EVENTS.includes(e.type));
+    const NON_STAGE = [...LOG_ONLY_EVENTS, 'GATE_CHANGED'];
+    const stageEvents = events.filter(e => !NON_STAGE.includes(e.type));
     const timeline = stageEvents.map((e, i) => ({
       type: e.type, at: e.server_time, agent: e.agent_name, note: e.note,
       minutes_since_previous: i === 0
@@ -205,7 +326,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     return {
       task: taskJson(task, { withEvents: true }),
       timeline,
-      problems: events.filter(e => LOG_ONLY_EVENTS.includes(e.type)),
+      problems: events.filter(e => NON_STAGE.includes(e.type)),
       totals: {
         total_minutes: minutesBetween(new Date(task.created_at), t('COMPLETED')),
         response_minutes: minutesBetween(new Date(task.created_at), t('ACCEPTED')),
@@ -324,6 +445,43 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       Number(q.get('storage')) || null, Number(q.get('pickup')), Number(q.get('destination'))));
   });
 
+  // --- flights (stands in for the AODB/FIDS feed; same shape a real feed adapter would use) ---
+  route('GET', /^\/api\/flights$/, ['ADMIN', 'AGENT'], (req, res) =>
+    json(res, 200, db.prepare('SELECT * FROM flights ORDER BY sched_time').all().map(flightJson)));
+
+  route('GET', /^\/api\/flights\/lookup$/, ['ADMIN'], (req, res, m, b, u, url) => {
+    const f = getFlightByNumber.get(url.searchParams.get('number') || '');
+    if (!f) return err(res, 404, 'Unknown flight');
+    json(res, 200, flightJson(f));
+  });
+
+  route('POST', /^\/api\/flights$/, ['ADMIN'], (req, res, m, body) => {
+    const { flight_number, direction } = body;
+    if (!flight_number || !['ARRIVAL', 'DEPARTURE'].includes(direction))
+      return err(res, 400, 'flight_number and direction (ARRIVAL|DEPARTURE) required');
+    if (body.gate_id && !getLoc.get(body.gate_id)) return err(res, 400, 'Unknown gate');
+    try {
+      db.prepare(
+        `INSERT INTO flights (flight_number, direction, sched_time, gate_id, status, updated_at)
+         VALUES (?,?,?,?,?,?)`)
+        .run(flight_number.toUpperCase(), direction, body.sched_time || null,
+          body.gate_id || null, body.status || 'ON_TIME', now());
+    } catch { return err(res, 409, 'Flight already exists'); }
+    json(res, 201, flightJson(getFlightByNumber.get(flight_number)));
+  });
+
+  // Feed update: gate change / delay / status. Gate changes cascade to active tasks.
+  route('POST', /^\/api\/flights\/(\d+)\/update$/, ['ADMIN'], (req, res, m, body, user) => {
+    const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(Number(m[1]));
+    if (!flight) return err(res, 404, 'Flight not found');
+    if (body.gate_id && !getLoc.get(body.gate_id)) return err(res, 400, 'Unknown gate');
+    const result = applyFlightUpdate(flight, body, user);
+    json(res, 200, {
+      flight: flightJson(db.prepare('SELECT * FROM flights WHERE id = ?').get(flight.id)),
+      ...result,
+    });
+  });
+
   // --- tasks ---
   route('POST', /^\/api\/tasks$/, ['ADMIN'], (req, res, m, body, user) => {
     const { passenger_name, pickup_id, destination_id, flight_direction } = body;
@@ -339,21 +497,35 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     const createdAt = now();
     const deadline = new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString();
     const r = db.prepare(
-      `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_notes, ssr_code,
-        wheelchair_type, flight_number, flight_direction, flight_time, priority,
-        storage_id, pickup_id, destination_id, template_est_minutes, admin_est_minutes,
-        sla_target_minutes, sla_deadline_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(user.id, createdAt, passenger_name, body.passenger_notes || null,
+      `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_phone,
+        passenger_notes, ssr_code, wheelchair_type, flight_number, flight_direction,
+        flight_time, priority, storage_id, pickup_id, destination_id,
+        template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(user.id, createdAt, passenger_name, body.passenger_phone || null,
+        body.passenger_notes || null,
         body.ssr_code || 'WCHR', body.wheelchair_type || 'MANUAL',
         body.flight_number || null, flight_direction, body.flight_time || null,
         body.priority || 'NORMAL', body.storage_id || null, pickup_id, destination_id,
         est.total_minutes, Number(body.admin_est_minutes) || est.total_minutes,
         slaTarget, deadline);
     const task = getTask(r.lastInsertRowid);
+    let autoResult;
     if (Array.isArray(body.agent_ids) && body.agent_ids.length) assign(task, body.agent_ids, user);
+    else if (body.auto_assign) autoResult = autoAssign(task, user);
     pushTaskUpdate(task.id);
-    json(res, 201, taskJson(getTask(task.id)));
+    json(res, 201, { ...taskJson(getTask(task.id)), auto_assign_result: autoResult ?? null });
+  });
+
+  route('POST', /^\/api\/tasks\/(\d+)\/autoassign$/, ['ADMIN'], (req, res, m, body, user) => {
+    const task = getTask(Number(m[1]));
+    if (!task) return err(res, 404, 'Task not found');
+    if (TERMINAL_STATUSES.includes(task.status)) return err(res, 409, `Task is ${task.status}`);
+    const result = autoAssign(task, user);
+    if (!result) return err(res, 409,
+      'No suitable agent available (on duty with required skills)');
+    pushTaskUpdate(task.id);
+    json(res, 200, { task: taskJson(getTask(task.id)), choice: result });
   });
 
   function assign(task, agentIds, byUser) {
@@ -367,6 +539,8 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
         `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time)
          VALUES (?,?,?,?,?)`)
         .run(randomUUID(), task.id, byUser.id, 'ASSIGNED', now());
+      const first = db.prepare('SELECT name FROM users WHERE id = ?').get(agentIds[0]);
+      notifier.onTaskEvent(getTask(task.id), 'ASSIGNED', first?.name);
     }
   }
 
@@ -440,6 +614,9 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
         db.prepare('UPDATE tasks SET sla_met = ? WHERE id = ?').run(met, task.id);
       }
       if (type === 'COMPLETED') onTaskCompleted(getTask(task.id));
+      const locName = type === 'ARRIVED_AT_PICKUP' ? getLoc.get(task.pickup_id)?.name
+        : type === 'PASSENGER_DELIVERED' ? getLoc.get(task.destination_id)?.name : null;
+      notifier.onTaskEvent(getTask(task.id), type, user.name, locName);
     }
     pushTaskUpdate(task.id);
     json(res, 200, { ok: true, task: taskJson(getTask(task.id)) });

@@ -1,4 +1,6 @@
 // Shared frontend API helper: auth, requests, live stream, toasts.
+import { t } from '/assets/i18n.js';
+
 export const API = {
   get token() { return localStorage.getItem('aero_token'); },
   get user() { try { return JSON.parse(localStorage.getItem('aero_user')); } catch { return null; } },
@@ -82,26 +84,18 @@ export function fmtMin(m) {
   return `${Math.round(m * 10) / 10} min`;
 }
 
-export const STATUS_LABELS = {
-  CREATED: 'Unassigned', ASSIGNED: 'Assigned', ACCEPTED: 'Accepted',
-  EN_ROUTE_TO_STORAGE: 'Going to storage', WHEELCHAIR_COLLECTED: 'Chair collected',
-  ARRIVED_AT_PICKUP: 'At pickup point', PASSENGER_PICKED_UP: 'Passenger on board',
-  IN_TRANSIT: 'In transit', PASSENGER_DELIVERED: 'Delivered',
-  COMPLETED: 'Completed', CANCELLED: 'Cancelled',
-};
-
 // SLA pill: countdown before pickup, then final met/breached state.
 export function slaPill(task) {
   if (task.status === 'CANCELLED') return '';
-  if (task.sla_met === 1) return `<span class="sla-pill green">SLA met</span>`;
-  if (task.sla_met === 0) return `<span class="sla-pill red">SLA breached</span>`;
+  if (task.sla_met === 1) return `<span class="sla-pill green">${t('sla_met')}</span>`;
+  if (task.sla_met === 0) return `<span class="sla-pill red">${t('sla_breached')}</span>`;
   if (['COMPLETED'].includes(task.status)) return '';
   const msLeft = new Date(task.sla_deadline_at) - Date.now();
   const total = task.sla_target_minutes * 60000 || 1;
   const mins = Math.floor(Math.abs(msLeft) / 60000);
   const secs = Math.floor((Math.abs(msLeft) % 60000) / 1000);
-  const t = `${mins}:${String(secs).padStart(2, '0')}`;
-  if (msLeft <= 0) return `<span class="sla-pill red">OVERDUE ${t}</span>`;
+  const clock = `${mins}:${String(secs).padStart(2, '0')}`;
+  if (msLeft <= 0) return `<span class="sla-pill red">${t('overdue')} ${clock}</span>`;
   const cls = msLeft / total > 0.5 ? 'green' : 'amber';
-  return `<span class="sla-pill ${cls}">⏱ ${t}</span>`;
+  return `<span class="sla-pill ${cls}">⏱ ${clock}</span>`;
 }

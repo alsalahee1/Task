@@ -45,6 +45,23 @@ put the server behind any TLS reverse proxy for field use.
   per-task results (stage timeline, estimate vs. actual, walked distance from GPS),
   aggregate reports, and **self-learning route templates** — after 5 completed tasks
   on a route, the "usual time" becomes the median of real actuals.
+- **Flight feed**: a flights schedule (stand-in for an AODB/FIDS feed with the same
+  update shape). Typing a flight number when creating a task auto-fills direction and
+  gate. A **gate change automatically retargets every active task** on that flight
+  (arrivals: pickup point; departures: destination), re-estimates it, logs a
+  `GATE_CHANGED` event on the task timeline, and texts the passenger — tasks already
+  past the affected point are left for the dispatcher to judge.
+- **Auto-assignment**: one click (or the "auto" option at creation) picks the best
+  agent — on duty, holding the required skills (electric-cart task → `ELECTRIC_CART`,
+  WCHC passenger → `TWO_PERSON_LIFT`), ranked by current workload then by GPS
+  distance to the task's start point.
+- **Passenger SMS notifications**: assigned / on-the-way / arrived / delivered /
+  gate-change messages per task. Stored as an auditable log the dispatcher sees on
+  the task; set `SMS_WEBHOOK_URL` to POST `{to, body}` to any SMS-gateway bridge
+  (Twilio/Vonage/etc.) — without it, messages are logged only (demo mode).
+- **Arabic interface (RTL)**: full agent app, login, and admin chrome are bilingual —
+  one-tap toggle (English/العربية), persisted per device, with proper right-to-left
+  layout.
 
 ## Project layout
 

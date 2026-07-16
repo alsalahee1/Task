@@ -14,16 +14,17 @@
       <div style="text-align:center; margin-bottom: 18px">
         <div style="font-size:44px">♿</div>
         <h1 style="margin:8px 0 2px">Aero<span style="color:var(--accent-2)">Assist</span></h1>
-        <div class="muted small">Airport wheelchair assistance — task manager</div>
+        <div class="muted small" id="tagline">Airport wheelchair assistance — task manager</div>
       </div>
       <form id="loginForm">
-        <label>Username</label>
+        <label id="lblUser">Username</label>
         <input id="username" autocomplete="username" required autofocus>
-        <label>Password</label>
+        <label id="lblPass">Password</label>
         <input id="password" type="password" autocomplete="current-password" required>
         <div id="error" style="color:var(--red); margin-top:10px; display:none; font-weight:600"></div>
-        <button class="primary" style="width:100%; margin-top:18px; padding:13px" type="submit">Sign in</button>
+        <button class="primary" style="width:100%; margin-top:18px; padding:13px" type="submit" id="btnLogin">Sign in</button>
       </form>
+      <div style="text-align:center; margin-top:12px" id="langHost"></div>
       <div class="muted small" style="margin-top:16px; text-align:center">
         Demo accounts — admin: <b>admin/admin123</b> · agent: <b>ahmed/agent123</b>
       </div>
@@ -31,6 +32,13 @@
   </div>
   <script type="module">
     import { API } from '/assets/api.js';
+    import { t, applyDir, langToggle } from '/assets/i18n.js';
+    applyDir();
+    langToggle(document.getElementById('langHost'));
+    document.getElementById('tagline').textContent = t('tagline');
+    document.getElementById('lblUser').textContent = t('username');
+    document.getElementById('lblPass').textContent = t('password');
+    document.getElementById('btnLogin').textContent = t('sign_in');
     const go = user => location.href = user.role === 'ADMIN' ? '/admin' : '/agent';
     if (API.token && API.user) go(API.user);
     document.getElementById('loginForm').addEventListener('submit', async e => {

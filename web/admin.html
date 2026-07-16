@@ -11,15 +11,17 @@
   <div class="topbar">
     <div class="logo">♿ Aero<span>Assist</span> <span class="muted small">dispatch</span></div>
     <nav class="tabs" id="tabs">
-      <button data-tab="board" class="active">Live board</button>
-      <button data-tab="new">＋ New task</button>
-      <button data-tab="map">Map</button>
-      <button data-tab="templates">Time templates</button>
-      <button data-tab="reports">Reports</button>
-      <button data-tab="team">Team</button>
+      <button data-tab="board" data-i18n="tab_board" class="active">Live board</button>
+      <button data-tab="new" data-i18n="tab_new">＋ New task</button>
+      <button data-tab="map" data-i18n="tab_map">Map</button>
+      <button data-tab="flights" data-i18n="tab_flights">Flights</button>
+      <button data-tab="templates" data-i18n="tab_templates">Time templates</button>
+      <button data-tab="reports" data-i18n="tab_reports">Reports</button>
+      <button data-tab="team" data-i18n="tab_team">Team</button>
     </nav>
     <span class="muted small" id="whoami"></span>
-    <button id="logout">Sign out</button>
+    <span id="langHost"></span>
+    <button id="logout" data-i18n="sign_out">Sign out</button>
   </div>
   <main class="page" id="page"></main>
   <div id="modalHost"></div>

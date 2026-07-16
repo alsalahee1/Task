@@ -1,10 +1,14 @@
 // Admin dispatcher dashboard.
-import { API, toast, esc, fmtTime, fmtMin, STATUS_LABELS, slaPill } from '/assets/api.js';
+import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
 import { renderMap } from '/assets/map.js';
+import { t as tr, statusLabel, applyDir, langToggle } from '/assets/i18n.js';
 
+applyDir();
 const user = API.requireRole('ADMIN');
 document.getElementById('whoami').textContent = user.name;
 document.getElementById('logout').onclick = () => API.logout();
+langToggle(document.getElementById('langHost'));
+document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
 
 // ---------- state ----------
 const state = {
@@ -13,16 +17,18 @@ const state = {
   agents: [],
   locations: [],
   templates: [],
+  flights: [],
   summary: null,
   reportRange: { from: today(), to: today() },
 };
 function today() { return new Date().toISOString().slice(0, 10); }
 
 async function loadAll() {
-  const [tasks, agents, locations, templates] = await Promise.all([
+  const [tasks, agents, locations, templates, flights] = await Promise.all([
     API.get(`/api/tasks?date=${today()}`), API.get('/api/agents'),
-    API.get('/api/locations'), API.get('/api/templates'),
+    API.get('/api/locations'), API.get('/api/templates'), API.get('/api/flights'),
   ]);
+  state.flights = flights;
   const active = await API.get('/api/tasks?active=1'); // include older still-active tasks
   state.tasks = new Map([...tasks, ...active].map(t => [t.id, t]));
   state.agents = agents;
@@ -33,6 +39,11 @@ async function loadAll() {
 // live updates
 API.stream({
   task: t => { state.tasks.set(t.id, t); if (state.tab === 'board' || state.tab === 'map') render(); },
+  flight: f => {
+    const i = state.flights.findIndex(x => x.id === f.id);
+    if (i >= 0) state.flights[i] = f; else state.flights.push(f);
+    if (state.tab === 'flights') render();
+  },
   agent: a => {
     const i = state.agents.findIndex(x => x.id === a.id);
     if (i >= 0) state.agents[i] = a; else state.agents.push(a);
@@ -62,18 +73,18 @@ document.getElementById('tabs').addEventListener('click', e => {
 const page = document.getElementById('page');
 
 function render() {
-  ({ board, new: renderNew, map: renderMapTab, templates: renderTemplates,
-     reports: renderReports, team: renderTeam })[state.tab]();
+  ({ board, new: renderNew, map: renderMapTab, flights: renderFlights,
+     templates: renderTemplates, reports: renderReports, team: renderTeam })[state.tab]();
 }
 
 // ---------- board ----------
 const COLS = [
-  ['Unassigned', ['CREATED']],
-  ['Assigned', ['ASSIGNED', 'ACCEPTED']],
-  ['In progress', ['EN_ROUTE_TO_STORAGE', 'WHEELCHAIR_COLLECTED', 'ARRIVED_AT_PICKUP',
+  ['col_unassigned', ['CREATED']],
+  ['col_assigned', ['ASSIGNED', 'ACCEPTED']],
+  ['col_progress', ['EN_ROUTE_TO_STORAGE', 'WHEELCHAIR_COLLECTED', 'ARRIVED_AT_PICKUP',
     'PASSENGER_PICKED_UP', 'IN_TRANSIT', 'PASSENGER_DELIVERED']],
-  ['Completed', ['COMPLETED']],
-  ['Cancelled', ['CANCELLED']],
+  ['col_completed', ['COMPLETED']],
+  ['col_cancelled', ['CANCELLED']],
 ];
 
 function taskCard(t) {
@@ -92,8 +103,8 @@ function taskCard(t) {
     <div class="small">${esc(t.pickup?.code)} <em style="color:var(--accent-2)">→</em> ${esc(t.destination?.code)}
       ${t.storage ? `<span class="muted">(chair from ${esc(t.storage.code)})</span>` : ''}</div>
     <div class="row spread mt">
-      <span class="badge">${STATUS_LABELS[t.status] || t.status}</span>
-      <span class="muted small">${agents || 'no agent'}</span>
+      <span class="badge">${statusLabel(t.status)}</span>
+      <span class="muted small">${agents || tr('no_agent')}</span>
     </div>
   </div>`;
 }
@@ -102,7 +113,7 @@ function board() {
   const tasks = [...state.tasks.values()].sort((a, b) => b.id - a.id);
   page.innerHTML = `<div class="board">` + COLS.map(([title, statuses]) => {
     const items = tasks.filter(t => statuses.includes(t.status));
-    return `<div class="col"><h3>${title} <span>${items.length}</span></h3>
+    return `<div class="col"><h3>${tr(title)} <span>${items.length}</span></h3>
       <div class="cards">${items.map(taskCard).join('') ||
         '<div class="muted small" style="padding:8px">—</div>'}</div></div>`;
   }).join('') + `</div>`;
@@ -132,7 +143,7 @@ async function openTask(id) {
       <span class="badge blue">${esc(t.flight_number || '')} ${t.flight_direction}</span>
       <span class="badge">${esc(t.ssr_code)} · ${esc(t.wheelchair_type)}</span>
       <span class="badge ${t.priority === 'NORMAL' ? '' : t.priority === 'URGENT' ? 'red' : 'amber'}">${t.priority}</span>
-      <span class="badge">${STATUS_LABELS[t.status]}</span>
+      <span class="badge">${statusLabel(t.status)}</span>
       ${slaPill(t)}
     </div>
     ${t.passenger_notes ? `<p class="small" style="color:#fcd34d">📝 ${esc(t.passenger_notes)}</p>` : ''}
@@ -147,8 +158,8 @@ async function openTask(id) {
 
         <h3 class="small muted mt" style="text-transform:uppercase">Timeline</h3>
         <div class="timeline">${t.events.map(ev => `
-          <div class="ev ${['PROBLEM_REPORTED', 'ESCALATED'].includes(ev.type) ? 'problem' : ''}">
-            <b>${STATUS_LABELS[ev.type] || ev.type.replaceAll('_', ' ')}</b>
+          <div class="ev ${['PROBLEM_REPORTED', 'ESCALATED', 'GATE_CHANGED'].includes(ev.type) ? 'problem' : ''}">
+            <b>${statusLabel(ev.type)}</b>
             <span class="muted small">${fmtTime(ev.server_time)} · ${esc(ev.agent_name || 'system')}</span>
             ${ev.note ? `<div class="small" style="color:#fcd34d">${esc(ev.note)}</div>` : ''}
           </div>`).join('') || '<div class="muted small">No events yet</div>'}
@@ -164,6 +175,12 @@ async function openTask(id) {
           </div>
           <p class="small muted">Estimate vs actual: template ${fmtMin(report.totals.template_est_minutes)},
             admin ${fmtMin(report.totals.admin_est_minutes)}, actual ${fmtMin(report.totals.total_minutes)}.</p>` : ''}
+
+        ${t.notifications?.length ? `
+          <h3 class="small muted mt" style="text-transform:uppercase">${tr('sms_log')}</h3>
+          ${t.notifications.map(n => `<div class="small" style="margin-bottom:6px">
+            <span class="badge ${n.status === 'LOGGED' || n.status === 'SENT' ? 'green' : 'amber'}">${esc(n.status)}</span>
+            <span class="muted">${fmtTime(n.created_at)} → ${esc(n.phone)}</span><br>${esc(n.message)}</div>`).join('')}` : ''}
       </div>
 
       <div style="width:360px; max-width:100%">
@@ -175,9 +192,10 @@ async function openTask(id) {
               ${esc(a.name)} ${a.on_duty ? '🟢 on duty' : '⚪ off duty'}</option>`).join('')}
           </select>
           <div class="row mt">
-            <button class="primary grow" id="assignBtn">Assign selected</button>
-            <button class="danger" id="cancelBtn">Cancel task…</button>
+            <button class="primary grow" id="assignBtn">${tr('assign_selected')}</button>
+            <button class="danger" id="cancelBtn">${tr('cancel_task')}</button>
           </div>
+          <button class="mt" style="width:100%" id="autoAssignBtn">${tr('auto_assign')}</button>
           ${onDuty.length === 0 ? '<p class="small" style="color:#fcd34d">No agents on duty right now.</p>' : ''}
         ` : ''}
       </div>
@@ -212,6 +230,17 @@ async function openTask(id) {
     } catch (ex) { toast(ex.message, true); }
   };
 
+  const autoBtn = document.getElementById('autoAssignBtn');
+  if (autoBtn) autoBtn.onclick = async () => {
+    try {
+      const r = await API.post(`/api/tasks/${t.id}/autoassign`, {});
+      state.tasks.set(r.task.id, r.task);
+      toast(`Assigned to ${r.choice.agent.name} (${r.choice.distance_m} m away, ` +
+        `${r.choice.active_tasks} active task(s))`);
+      close(); render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+
   const cancelBtn = document.getElementById('cancelBtn');
   if (cancelBtn) cancelBtn.onclick = async () => {
     const reason = prompt('Cancel reason (required):');
@@ -237,7 +266,7 @@ function renderNew() {
     <h2>New assistance task</h2>
     <form id="newTask">
       <div class="row">
-        <div class="grow"><label>Passenger name *</label><input name="passenger_name" required></div>
+        <div class="grow"><label>${tr('passenger_name')}</label><input name="passenger_name" required></div>
         <div><label>SSR code</label>
           <select name="ssr_code">
             <option>WCHR</option><option>WCHS</option><option>WCHC</option><option>DPNA</option>
@@ -248,8 +277,15 @@ function renderNew() {
             <option>OWN_CHAIR</option><option>CART</option>
           </select></div>
       </div>
+      <label>${tr('passenger_phone')}</label>
+      <input name="passenger_phone" type="tel" placeholder="+971 50 123 4567">
       <div class="row">
-        <div class="grow"><label>Flight number</label><input name="flight_number" placeholder="EK202"></div>
+        <div class="grow"><label>${tr('flight_number')}</label>
+          <input name="flight_number" id="flightNum" placeholder="EK202" list="flightList">
+          <datalist id="flightList">
+            ${state.flights.map(f => `<option value="${esc(f.flight_number)}">${f.direction} · gate ${esc(f.gate?.code || '?')}</option>`).join('')}
+          </datalist>
+          <div class="small muted" id="flightInfo"></div></div>
         <div><label>Direction *</label>
           <select name="flight_direction" id="dirSelect">
             <option>ARRIVAL</option><option>DEPARTURE</option><option>TRANSFER</option>
@@ -272,12 +308,13 @@ function renderNew() {
       </div>
       <label>Notes for the agent</label>
       <textarea name="passenger_notes" rows="2" placeholder="e.g. passenger is deaf; travelling with infant; needs 2-person lift"></textarea>
-      <label>Assign now (optional)</label>
+      <label>${tr('assign_now')}</label>
       <select name="agent_id">
-        <option value="">— assign later —</option>
+        <option value="">${tr('assign_later')}</option>
+        <option value="auto">${tr('auto_assign_opt')}</option>
         ${state.agents.map(a => `<option value="${a.id}">${esc(a.name)} ${a.on_duty ? '🟢' : '⚪'}</option>`).join('')}
       </select>
-      <button class="primary mt" style="width:100%; padding:13px" type="submit">Create task</button>
+      <button class="primary mt" style="width:100%; padding:13px" type="submit">${tr('create_task')}</button>
     </form>
   </div>`;
 
@@ -286,6 +323,27 @@ function renderNew() {
     document.getElementById('slaTarget').value =
       { ARRIVAL: 20, DEPARTURE: 30, TRANSFER: 30 }[dirSel.value];
   };
+
+  // Flight autofill: direction + gate (pickup for arrivals, destination for departures)
+  document.getElementById('flightNum').addEventListener('change', async e => {
+    const num = e.target.value.trim();
+    const info = document.getElementById('flightInfo');
+    info.textContent = '';
+    if (!num) return;
+    try {
+      const f = await API.get(`/api/flights/lookup?number=${encodeURIComponent(num)}`);
+      dirSel.value = f.direction;
+      dirSel.onchange();
+      if (f.gate) {
+        const sel = f.direction === 'ARRIVAL'
+          ? document.getElementById('pickupSel') : document.getElementById('destSel');
+        sel.value = String(f.gate.id);
+        sel.dispatchEvent(new Event('change'));
+      }
+      info.textContent = `✓ ${f.direction} · gate ${f.gate?.code || '?'} · ${f.status}` +
+        (f.sched_time ? ` · ${new Date(f.sched_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '');
+    } catch { info.textContent = 'flight not in schedule — fill fields manually'; }
+  });
 
   async function refreshEstimate() {
     const s = document.getElementById('storageSel').value;
@@ -317,12 +375,17 @@ function renderNew() {
     if (body.admin_est_minutes) body.admin_est_minutes = Number(body.admin_est_minutes);
     else delete body.admin_est_minutes;
     body.sla_target_minutes = Number(body.sla_target_minutes);
-    if (body.agent_id) body.agent_ids = [Number(body.agent_id)];
+    if (body.agent_id === 'auto') body.auto_assign = true;
+    else if (body.agent_id) body.agent_ids = [Number(body.agent_id)];
     delete body.agent_id;
     try {
       const t = await API.post('/api/tasks', body);
       state.tasks.set(t.id, t);
-      toast(`Task #${t.id} created${t.assignments.length ? ' and assigned' : ''}`);
+      if (body.auto_assign && !t.auto_assign_result)
+        toast(`Task #${t.id} created — no suitable agent on duty, assign manually`, true);
+      else if (t.auto_assign_result)
+        toast(`Task #${t.id} → ${t.auto_assign_result.agent.name} (${t.auto_assign_result.distance_m} m away)`);
+      else toast(`Task #${t.id} created${t.assignments.length ? ' and assigned' : ''}`);
       state.tab = 'board';
       document.querySelectorAll('#tabs button').forEach(x =>
         x.classList.toggle('active', x.dataset.tab === 'board'));
@@ -350,6 +413,73 @@ async function renderMapTab() {
     agents: state.agents.filter(a => a.on_duty),
     lines, routes, highlight,
   });
+}
+
+// ---------- flights ----------
+const FLIGHT_STATUSES = ['ON_TIME', 'DELAYED', 'LANDED', 'BOARDING', 'DEPARTED', 'CANCELLED'];
+
+function renderFlights() {
+  const gates = state.locations.filter(l => l.type === 'GATE');
+  page.innerHTML = `<div class="card">
+    <div class="row spread"><h2>${tr('tab_flights')}</h2>
+      <span class="muted small">Changing a gate automatically retargets every active task on that flight
+      (arrivals: pickup point · departures: destination) and notifies passengers by SMS.</span></div>
+    <table><thead><tr><th>Flight</th><th>Direction</th><th>Scheduled</th><th>Gate</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      ${state.flights.map(f => `<tr>
+        <td><b>${esc(f.flight_number)}</b></td>
+        <td>${f.direction}</td>
+        <td>${f.sched_time ? new Date(f.sched_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+        <td><select data-fgate="${f.id}">
+          ${gates.map(g => `<option value="${g.id}" ${g.id === f.gate?.id ? 'selected' : ''}>${esc(g.code)}</option>`).join('')}
+        </select></td>
+        <td><select data-fstatus="${f.id}">
+          ${FLIGHT_STATUSES.map(st => `<option ${st === f.status ? 'selected' : ''}>${st}</option>`).join('')}
+        </select></td>
+        <td><button class="primary" data-fapply="${f.id}">Apply update</button></td>
+      </tr>`).join('')}
+      <tr>
+        <td><input id="nfNum" placeholder="XY123" style="width:110px"></td>
+        <td><select id="nfDir"><option>ARRIVAL</option><option>DEPARTURE</option></select></td>
+        <td><input id="nfTime" type="time"></td>
+        <td><select id="nfGate">${gates.map(g => `<option value="${g.id}">${esc(g.code)}</option>`).join('')}</select></td>
+        <td class="muted small">add flight</td>
+        <td><button class="primary" id="nfAdd">Add</button></td>
+      </tr>
+    </tbody></table>
+  </div>`;
+
+  page.querySelectorAll('[data-fapply]').forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.fapply;
+    try {
+      const r = await API.post(`/api/flights/${id}/update`, {
+        gate_id: Number(page.querySelector(`[data-fgate="${id}"]`).value),
+        status: page.querySelector(`[data-fstatus="${id}"]`).value,
+      });
+      const i = state.flights.findIndex(x => x.id === Number(id));
+      state.flights[i] = r.flight;
+      toast(r.updated_tasks.length
+        ? `Flight updated — ${r.updated_tasks.length} active task(s) retargeted to gate ${r.flight.gate.code}`
+        : 'Flight updated');
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  });
+
+  document.getElementById('nfAdd').onclick = async () => {
+    const num = document.getElementById('nfNum').value.trim();
+    if (!num) return toast('Flight number required', true);
+    const time = document.getElementById('nfTime').value;
+    const sched = time ? new Date(`${today()}T${time}:00`).toISOString() : null;
+    try {
+      await API.post('/api/flights', {
+        flight_number: num, direction: document.getElementById('nfDir').value,
+        gate_id: Number(document.getElementById('nfGate').value), sched_time: sched,
+      });
+      state.flights = await API.get('/api/flights');
+      toast('Flight added');
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  };
 }
 
 // ---------- templates ----------

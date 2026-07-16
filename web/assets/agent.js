@@ -1,6 +1,10 @@
 // Agent mobile app: shift, task queue, one-tap stage progression,
 // GPS breadcrumbs, and an offline-tolerant send queue.
-import { API, toast, esc, fmtTime, fmtMin, STATUS_LABELS, slaPill } from '/assets/api.js';
+import { API, toast, esc, fmtTime, fmtMin, slaPill } from '/assets/api.js';
+import { t, statusLabel, actionLabel, applyDir, langToggle } from '/assets/i18n.js';
+
+applyDir();
+const i18nT = t;
 
 const me = API.requireRole('AGENT');
 const app = document.getElementById('app');
@@ -55,7 +59,7 @@ async function send(path, body) {
     if (ex.message.includes('HTTP') || ex instanceof TypeError || ex.message.includes('fetch')) {
       enqueue(path, body);
       state.online = false;
-      toast('Offline — action saved, will sync automatically');
+      toast(i18nT('offline_saved'));
     } else {
       throw ex; // real validation error
     }
@@ -141,7 +145,7 @@ function stepper(t) {
     t.storage || !['EN_ROUTE_TO_STORAGE', 'WHEELCHAIR_COLLECTED'].includes(s));
   const cur = stages.indexOf(t.status);
   return `<div class="stepper">${stages.map((s, i) =>
-    `<div class="step ${i < cur ? 'done' : i === cur ? 'current' : ''}" title="${STATUS_LABELS[s]}"></div>`
+    `<div class="step ${i < cur ? 'done' : i === cur ? 'current' : ''}" title="${statusLabel(s)}"></div>`
   ).join('')}</div>`;
 }
 
@@ -156,21 +160,22 @@ function renderHome() {
     return (p[a.priority] - p[b.priority]) || (new Date(a.sla_deadline_at) - new Date(b.sla_deadline_at));
   });
   app.innerHTML = `
-    ${!state.online ? '<div class="offline-banner">📡 Offline — actions are queued and will sync</div>' : ''}
+    ${!state.online ? `<div class="offline-banner">${t('offline_note')}</div>` : ''}
     <div class="row spread">
-      <div><h2 style="margin:0">Hi, ${esc(me.name.split(' ')[0])} 👋</h2>
-        <span class="muted small">${state.tasks.length} active task(s)</span></div>
-      <button id="logout" class="small">Sign out</button>
+      <div><h2 style="margin:0">${t('hi')}, ${esc(me.name.split(' ')[0])} 👋</h2>
+        <span class="muted small">${state.tasks.length} ${t('active_tasks')}</span></div>
+      <span id="langHost"></span>
+      <button id="logout" class="small">${t('sign_out')}</button>
     </div>
     <div class="card mt">
       <div class="row spread">
-        <div><b>${state.onDuty ? 'You are on duty' : 'You are off duty'}</b>
-          <div class="muted small">${state.onDuty ? 'Dispatch can assign you tasks' : 'Go on duty to receive tasks'}</div></div>
+        <div><b>${state.onDuty ? t('on_duty') : t('off_duty')}</b>
+          <div class="muted small">${state.onDuty ? t('on_duty_hint') : t('off_duty_hint')}</div></div>
         <button class="${state.onDuty ? 'danger' : 'primary'}" id="shiftBtn">
-          ${state.onDuty ? 'End shift' : 'Start shift'}</button>
+          ${state.onDuty ? t('end_shift') : t('start_shift')}</button>
       </div>
     </div>
-    <h3 class="mt">My tasks</h3>
+    <h3 class="mt">${t('my_tasks')}</h3>
     ${sorted.map(t => `
       <div class="card agent-task-card task-card" data-task="${t.id}">
         <div class="row spread">
@@ -180,17 +185,18 @@ function renderHome() {
           <span data-sla-task="${t.id}">${slaPill(t)}</span>
         </div>
         <div class="route" style="font-size:17px; font-weight:700; margin:6px 0 2px">${esc(t.passenger_name)}</div>
-        <div class="small muted">${t.storage ? `chair from <b>${esc(t.storage.code)}</b> · ` : ''}
-          pickup <b>${esc(t.pickup?.code)}</b> → <b>${esc(t.destination?.code)}</b>
-          · est ${fmtMin(t.admin_est_minutes)}</div>
+        <div class="small muted">${t.storage ? `${i18nT('chair_from')} <b>${esc(t.storage.code)}</b> · ` : ''}
+          ${i18nT('pickup_l')} <b>${esc(t.pickup?.code)}</b> → <b>${esc(t.destination?.code)}</b>
+          · ${i18nT('est')} ${fmtMin(t.admin_est_minutes)}</div>
         ${stepper(t)}
         <div class="row spread">
-          <span class="stage-chip">● ${STATUS_LABELS[t.status]}</span>
-          ${t.next_action ? `<span class="muted small">next: ${esc(t.next_action.label)}</span>` : ''}
+          <span class="stage-chip">● ${statusLabel(t.status)}</span>
+          ${t.next_action ? `<span class="muted small">${i18nT('next')}: ${esc(actionLabel(t.next_action.type))}</span>` : ''}
         </div>
       </div>`).join('') ||
-      '<div class="card muted" style="text-align:center; padding:32px">No active tasks.<br>New tasks appear here automatically.</div>'}
+      `<div class="card muted" style="text-align:center; padding:32px">${i18nT('no_tasks')}<br>${i18nT('tasks_appear')}</div>`}
   `;
+  langToggle(document.getElementById('langHost'));
   document.getElementById('logout').onclick = () => API.logout();
   document.getElementById('shiftBtn').onclick = async () => {
     try {
@@ -213,9 +219,9 @@ function renderTask() {
   const since = t.created_at;
 
   app.innerHTML = `
-    ${!state.online ? '<div class="offline-banner">📡 Offline — actions are queued and will sync</div>' : ''}
+    ${!state.online ? `<div class="offline-banner">${i18nT('offline_note')}</div>` : ''}
     <div class="row spread">
-      <button id="back">← My tasks</button>
+      <button id="back">${i18nT('back_tasks')}</button>
       <span data-sla-task="${t.id}">${slaPill(t)}</span>
     </div>
     <div class="card mt">
@@ -226,22 +232,22 @@ function renderTask() {
       <h2 style="margin:10px 0 0">${esc(t.passenger_name)}</h2>
       ${t.passenger_notes ? `<p class="small" style="color:#fcd34d; margin:6px 0 0">📝 ${esc(t.passenger_notes)}</p>` : ''}
       ${stepper(t)}
-      <div class="stage-chip" style="font-size:14px">● ${STATUS_LABELS[t.status]}</div>
+      <div class="stage-chip" style="font-size:14px">● ${statusLabel(t.status)}</div>
       <div class="big-timer" id="elapsed" data-since="${since}">--:--</div>
       <div class="info-grid">
-        ${t.storage ? `<div class="cell"><div class="k">Wheelchair from</div><div class="v">${esc(t.storage.code)} — ${esc(t.storage.name)}</div></div>` : ''}
-        <div class="cell"><div class="k">Pickup</div><div class="v">${esc(t.pickup.code)} — ${esc(t.pickup.name)}</div></div>
-        <div class="cell"><div class="k">Destination</div><div class="v">${esc(t.destination.code)} — ${esc(t.destination.name)}</div></div>
-        <div class="cell"><div class="k">Estimated</div><div class="v">${fmtMin(t.admin_est_minutes)}</div></div>
+        ${t.storage ? `<div class="cell"><div class="k">${i18nT('wheelchair_from')}</div><div class="v">${esc(t.storage.code)} — ${esc(t.storage.name)}</div></div>` : ''}
+        <div class="cell"><div class="k">${i18nT('pickup')}</div><div class="v">${esc(t.pickup.code)} — ${esc(t.pickup.name)}</div></div>
+        <div class="cell"><div class="k">${i18nT('destination')}</div><div class="v">${esc(t.destination.code)} — ${esc(t.destination.name)}</div></div>
+        <div class="cell"><div class="k">${i18nT('estimated')}</div><div class="v">${fmtMin(t.admin_est_minutes)}</div></div>
       </div>
       ${t.next_action ? `<button class="big mt ${t.next_action.type === 'COMPLETED' ? 'green' : ''}" id="nextBtn">
-        ${esc(t.next_action.label)}</button>` : ''}
+        ${esc(actionLabel(t.next_action.type))}</button>` : ''}
       ${done ? `<div class="mt" style="text-align:center">
         <div style="font-size:40px">${t.status === 'COMPLETED' ? '✅' : '🚫'}</div>
-        <b>${STATUS_LABELS[t.status]}</b>
+        <b>${statusLabel(t.status)}</b>
         <div id="miniReport" class="muted small mt">Loading summary…</div></div>` : ''}
       ${!done ? `<div class="row mt">
-        <button class="grow" id="problemBtn">⚠ Report problem</button>
+        <button class="grow" id="problemBtn">${i18nT('report_problem')}</button>
       </div>` : ''}
     </div>`;
 
@@ -265,8 +271,8 @@ function renderTask() {
       t.status = t.next_action.type;
       const i = stages.indexOf(t.status);
       t.next_action = i >= 0 && i < stages.length - 1
-        ? { type: stages[i + 1], label: nextLabel(stages[i + 1]) } : null;
-      if (t.status === 'COMPLETED') toast('Task completed — great job! ✅');
+        ? { type: stages[i + 1], label: actionLabel(stages[i + 1]) } : null;
+      if (t.status === 'COMPLETED') toast(i18nT('task_done'));
       render();
     } catch (ex) {
       toast(ex.message, true);
@@ -276,33 +282,24 @@ function renderTask() {
 
   const problemBtn = document.getElementById('problemBtn');
   if (problemBtn) problemBtn.onclick = async () => {
-    const note = prompt('Describe the problem (e.g. broken wheelchair, passenger not found, elevator out of service):');
+    const note = prompt(i18nT('problem_prompt'));
     if (!note) return;
     await send(`/api/tasks/${t.id}/events`, {
       type: 'PROBLEM_REPORTED', uuid: crypto.randomUUID(),
       client_time: new Date().toISOString(), note,
     });
-    toast('Problem reported to dispatch');
+    toast(i18nT('problem_sent'));
   };
 
   if (done && t.status === 'COMPLETED') {
     API.get(`/api/tasks/${t.id}/report`).then(r => {
       const el = document.getElementById('miniReport');
-      if (el) el.innerHTML = `Total: <b>${fmtMin(r.totals.total_minutes)}</b>
-        (estimate ${fmtMin(r.totals.admin_est_minutes)}) ·
-        Distance: <b>${r.totals.distance_meters} m</b> ·
+      if (el) el.innerHTML = `${i18nT('total')}: <b>${fmtMin(r.totals.total_minutes)}</b>
+        (${i18nT('estimate')} ${fmtMin(r.totals.admin_est_minutes)}) ·
+        ${i18nT('distance')}: <b>${r.totals.distance_meters} m</b> ·
         SLA: <b>${r.totals.sla_state}</b>`;
     }).catch(() => {});
   }
-}
-
-function nextLabel(type) {
-  return {
-    ACCEPTED: 'Accept task', EN_ROUTE_TO_STORAGE: 'Heading to wheelchair storage',
-    WHEELCHAIR_COLLECTED: 'Wheelchair collected', ARRIVED_AT_PICKUP: 'Arrived at pickup point',
-    PASSENGER_PICKED_UP: 'Passenger picked up', IN_TRANSIT: 'Start moving to destination',
-    PASSENGER_DELIVERED: 'Passenger delivered', COMPLETED: 'Complete task',
-  }[type] || type;
 }
 
 // PWA service worker (best effort)
