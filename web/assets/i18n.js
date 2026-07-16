@@ -46,6 +46,10 @@ const DICT = {
     storage_opt: 'Wheelchair storage (optional)', no_storage: '— none (no storage chair needed) —',
     pickup_point: 'Pickup point *', your_estimate: 'Your estimate (min)', sla_target: 'SLA target (min)',
     sms_log: 'Passenger SMS log',
+    tab_wheelchairs: 'Wheelchairs',
+    qr_label: 'Wheelchair QR code', qr_placeholder: 'scan or type e.g. WC-S1-001',
+    scan: '📷 Scan', chair: 'Chair', scan_hint: 'Point the camera at the chair label',
+    no_camera_qr: 'Camera scanning not supported on this device — type the code instead',
   },
   ar: {
     sign_in: 'تسجيل الدخول', sign_out: 'تسجيل الخروج',
@@ -89,6 +93,10 @@ const DICT = {
     storage_opt: 'مخزن الكراسي (اختياري)', no_storage: '— بدون (لا حاجة لكرسي من المخزن) —',
     pickup_point: 'نقطة الاستلام *', your_estimate: 'تقديرك (دقيقة)', sla_target: 'هدف SLA (دقيقة)',
     sms_log: 'سجل رسائل الراكب',
+    tab_wheelchairs: 'الكراسي المتحركة',
+    qr_label: 'رمز QR للكرسي', qr_placeholder: 'امسح أو اكتب مثل WC-S1-001',
+    scan: '📷 مسح', chair: 'الكرسي', scan_hint: 'وجّه الكاميرا نحو ملصق الكرسي',
+    no_camera_qr: 'المسح بالكاميرا غير مدعوم على هذا الجهاز — اكتب الرمز يدوياً',
   },
 };
 

@@ -62,6 +62,20 @@ put the server behind any TLS reverse proxy for field use.
 - **Arabic interface (RTL)**: full agent app, login, and admin chrome are bilingual —
   one-tap toggle (English/العربية), persisted per device, with proper right-to-left
   layout.
+- **Wheelchair QR inventory**: every chair carries a QR label. The agent scans it
+  (phone camera via the BarcodeDetector API, with manual typing as fallback) at the
+  "wheelchair collected" step — proof of collection, and the chair is linked to the
+  task. On completion the chair is freed at the destination, so the fleet tab always
+  shows where every chair is, what's available per storage room, what's in use, and
+  what's in maintenance. Unknown codes never block a task (offline queues must
+  drain); they're flagged to the dispatcher instead.
+- **Auto task creation from airline SSR lists**: paste a flight's assistance
+  manifest (`Name, SSR code, phone` per line) on the Flights tab and one task per
+  passenger is created with the right routing (arrivals: gate → baggage; departures:
+  check-in → gate), nearest storage with available chairs, WCHC passengers
+  prioritized with aisle chairs, duplicate passengers skipped, and optional
+  auto-assignment. A real SSR feed can post the same JSON to
+  `POST /api/flights/:id/ssrs`.
 
 ## Project layout
 

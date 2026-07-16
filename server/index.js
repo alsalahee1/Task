@@ -95,10 +95,17 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     return l && { id: l.id, code: l.code, name: l.name, type: l.type, x: l.x, y: l.y };
   }
 
+  function chairBrief(id) {
+    if (!id) return null;
+    const c = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(id);
+    return c && { id: c.id, qr_code: c.qr_code, type: c.type, status: c.status };
+  }
+
   function taskJson(task, { withEvents = false } = {}) {
     const next = nextStage(task);
     const out = {
       ...task,
+      wheelchair: chairBrief(task.wheelchair_id),
       storage: locBrief(task.storage_id),
       pickup: locBrief(task.pickup_id),
       destination: locBrief(task.destination_id),
@@ -230,6 +237,65 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       active_tasks: best.active_tasks,
       required_skills: requiredSkills(task),
     };
+  }
+
+  // ---------- wheelchair fleet ----------
+  const getChairByQr = db.prepare(
+    'SELECT * FROM wheelchairs WHERE upper(qr_code) = upper(?)');
+
+  function chairJson(c) {
+    return {
+      ...c,
+      home_storage: locBrief(c.home_storage_id),
+      current_location: locBrief(c.current_location_id),
+    };
+  }
+
+  // Agent scanned a chair at collection: link it to the task and mark it in use.
+  // An unknown code never blocks the task (offline queues must always drain) —
+  // it is recorded on the event note for the dispatcher instead.
+  function attachWheelchair(task, qr, agentId) {
+    const chair = getChairByQr.get(qr);
+    if (!chair) return { note: `Unregistered chair code: ${qr}` };
+    db.prepare(
+      `UPDATE wheelchairs SET status = 'IN_USE', current_task_id = ?, current_location_id = NULL
+       WHERE id = ?`).run(task.id, chair.id);
+    db.prepare('UPDATE tasks SET wheelchair_id = ? WHERE id = ?').run(chair.id, task.id);
+    broadcast('wheelchair', chairJson(getChairByQr.get(qr)));
+    const warn = chair.status !== 'AVAILABLE'
+      ? ` (warning: chair was marked ${chair.status})` : '';
+    return { note: `Chair ${chair.qr_code} collected${warn}` };
+  }
+
+  // Task finished: free the chair. Completed → it now sits at the destination;
+  // cancelled → whereabouts unknown until it is scanned again or seen at storage.
+  function releaseWheelchair(task, finalStatus) {
+    if (!task.wheelchair_id) return;
+    db.prepare(
+      `UPDATE wheelchairs SET status = 'AVAILABLE', current_task_id = NULL,
+         current_location_id = ? WHERE id = ?`)
+      .run(finalStatus === 'COMPLETED' ? task.destination_id : null, task.wheelchair_id);
+    const c = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(task.wheelchair_id);
+    broadcast('wheelchair', chairJson(c));
+  }
+
+  function availableChairsAt(storageId) {
+    return db.prepare(
+      `SELECT COUNT(*) AS n FROM wheelchairs
+       WHERE status = 'AVAILABLE' AND current_location_id = ?`).get(storageId).n;
+  }
+
+  // Nearest storage to a pickup point, preferring ones with available chairs.
+  function pickStorage(pickupId) {
+    const pickup = getLoc.get(pickupId);
+    const storages = db.prepare(`SELECT * FROM locations WHERE type = 'STORAGE'`).all()
+      .map(s => ({
+        s,
+        dist: Math.hypot(s.x - pickup.x, s.y - pickup.y),
+        chairs: availableChairsAt(s.id),
+      }))
+      .sort((a, b) => (b.chairs > 0) - (a.chairs > 0) || a.dist - b.dist);
+    return storages[0]?.s.id ?? null;
   }
 
   // ---------- flight feed ----------
@@ -482,6 +548,94 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     });
   });
 
+  // --- wheelchair fleet ---
+  route('GET', /^\/api\/wheelchairs$/, ['ADMIN', 'AGENT'], (req, res) =>
+    json(res, 200, db.prepare('SELECT * FROM wheelchairs ORDER BY qr_code').all().map(chairJson)));
+
+  route('POST', /^\/api\/wheelchairs$/, ['ADMIN'], (req, res, m, body) => {
+    const { qr_code, type, home_storage_id } = body;
+    if (!qr_code) return err(res, 400, 'qr_code required');
+    if (home_storage_id && !getLoc.get(home_storage_id)) return err(res, 400, 'Unknown storage');
+    try {
+      db.prepare(
+        `INSERT INTO wheelchairs (qr_code, type, home_storage_id, current_location_id)
+         VALUES (?,?,?,?)`)
+        .run(qr_code.toUpperCase(), type || 'MANUAL',
+          home_storage_id || null, home_storage_id || null);
+    } catch { return err(res, 409, 'QR code already registered'); }
+    json(res, 201, chairJson(getChairByQr.get(qr_code)));
+  });
+
+  // Maintenance toggle / return to a storage room.
+  route('POST', /^\/api\/wheelchairs\/(\d+)\/status$/, ['ADMIN'], (req, res, m, body) => {
+    const chair = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(Number(m[1]));
+    if (!chair) return err(res, 404, 'Wheelchair not found');
+    if (chair.status === 'IN_USE') return err(res, 409, 'Chair is in use on a task');
+    const status = body.status;
+    if (!['AVAILABLE', 'MAINTENANCE'].includes(status))
+      return err(res, 400, 'status must be AVAILABLE or MAINTENANCE');
+    if (body.location_id && !getLoc.get(body.location_id)) return err(res, 400, 'Unknown location');
+    db.prepare('UPDATE wheelchairs SET status = ?, current_location_id = ? WHERE id = ?')
+      .run(status, body.location_id ?? chair.current_location_id, chair.id);
+    const fresh = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(chair.id);
+    broadcast('wheelchair', chairJson(fresh));
+    json(res, 200, chairJson(fresh));
+  });
+
+  // --- SSR intake: airline passenger-assistance manifest for a flight ---
+  // Real feeds deliver SSR codes (WCHR/WCHS/WCHC) per passenger; this endpoint
+  // accepts that list and turns each passenger into a task automatically.
+  route('POST', /^\/api\/flights\/(\d+)\/ssrs$/, ['ADMIN'], (req, res, m, body, user) => {
+    const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(Number(m[1]));
+    if (!flight) return err(res, 404, 'Flight not found');
+    if (!flight.gate_id) return err(res, 409, 'Flight has no gate assigned yet');
+    const passengers = Array.isArray(body.passengers) ? body.passengers : [];
+    if (!passengers.length) return err(res, 400, 'passengers[] required');
+
+    const checkin = db.prepare(`SELECT id FROM locations WHERE type = 'CHECKIN' LIMIT 1`).get();
+    const baggage = db.prepare(`SELECT id FROM locations WHERE type = 'BAGGAGE' LIMIT 1`).get();
+    if (!checkin || !baggage) return err(res, 500, 'CHECKIN/BAGGAGE locations missing');
+    const pickupId = flight.direction === 'ARRIVAL' ? flight.gate_id : checkin.id;
+    const destinationId = flight.direction === 'ARRIVAL' ? baggage.id : flight.gate_id;
+
+    const created = [], skipped = [];
+    for (const p of passengers) {
+      const name = (p.name || '').trim();
+      if (!name) continue;
+      const dup = db.prepare(
+        `SELECT id FROM tasks WHERE upper(flight_number) = upper(?)
+         AND passenger_name = ? AND status != 'CANCELLED'`)
+        .get(flight.flight_number, name);
+      if (dup) { skipped.push({ name, reason: `already has task #${dup.id}` }); continue; }
+
+      const ssr = ['WCHR', 'WCHS', 'WCHC', 'DPNA'].includes(p.ssr_code) ? p.ssr_code : 'WCHR';
+      const storageId = pickStorage(pickupId);
+      const est = estimateTask(storageId, pickupId, destinationId);
+      const slaTarget = SLA_DEFAULTS[flight.direction] || 30;
+      const createdAt = now();
+      const r = db.prepare(
+        `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_phone,
+          passenger_notes, ssr_code, wheelchair_type, flight_number, flight_direction,
+          flight_time, priority, storage_id, pickup_id, destination_id,
+          template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(user.id, createdAt, name, p.phone || null,
+          `Auto-created from airline SSR list (${ssr})`,
+          ssr, ssr === 'WCHC' ? 'AISLE' : 'MANUAL',
+          flight.flight_number, flight.direction, flight.sched_time,
+          ssr === 'WCHC' ? 'HIGH' : 'NORMAL',
+          storageId, pickupId, destinationId,
+          est.total_minutes, est.total_minutes, slaTarget,
+          new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString());
+      const task = getTask(r.lastInsertRowid);
+      let autoResult = null;
+      if (body.auto_assign) autoResult = autoAssign(task, user);
+      pushTaskUpdate(task.id);
+      created.push({ id: task.id, name, ssr, assigned_to: autoResult?.agent.name ?? null });
+    }
+    json(res, 201, { flight: flight.flight_number, created, skipped });
+  });
+
   // --- tasks ---
   route('POST', /^\/api\/tasks$/, ['ADMIN'], (req, res, m, body, user) => {
     const { passenger_name, pickup_id, destination_id, flight_direction } = body;
@@ -602,18 +756,26 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     const v = validateEvent(task, type);
     if (!v.ok) return err(res, 409, v.error);
     const serverTime = now();
+    let note = body.note || null;
+    if (type === 'WHEELCHAIR_COLLECTED' && body.wheelchair_qr) {
+      const chairNote = attachWheelchair(task, String(body.wheelchair_qr).trim(), user.id).note;
+      note = note ? `${note} · ${chairNote}` : chairNote;
+    }
     db.prepare(
       `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, client_time, lat, lng, note)
        VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(body.uuid || randomUUID(), task.id, user.id, type, serverTime,
-        body.client_time || null, body.lat ?? null, body.lng ?? null, body.note || null);
+        body.client_time || null, body.lat ?? null, body.lng ?? null, note);
     if (v.statusChange) {
       db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(v.statusChange, task.id);
       if (type === 'ARRIVED_AT_PICKUP') {
         const met = new Date(serverTime) <= new Date(task.sla_deadline_at) ? 1 : 0;
         db.prepare('UPDATE tasks SET sla_met = ? WHERE id = ?').run(met, task.id);
       }
-      if (type === 'COMPLETED') onTaskCompleted(getTask(task.id));
+      if (type === 'COMPLETED') {
+        onTaskCompleted(getTask(task.id));
+        releaseWheelchair(getTask(task.id), 'COMPLETED');
+      }
       const locName = type === 'ARRIVED_AT_PICKUP' ? getLoc.get(task.pickup_id)?.name
         : type === 'PASSENGER_DELIVERED' ? getLoc.get(task.destination_id)?.name : null;
       notifier.onTaskEvent(getTask(task.id), type, user.name, locName);
@@ -651,6 +813,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     if (!body.reason) return err(res, 400, 'reason required');
     db.prepare(`UPDATE tasks SET status = 'CANCELLED', cancel_reason = ? WHERE id = ?`)
       .run(body.reason, task.id);
+    releaseWheelchair(task, 'CANCELLED');
     db.prepare(
       `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, note)
        VALUES (?,?,?,?,?,?)`)

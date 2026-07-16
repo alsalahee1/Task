@@ -240,6 +240,18 @@ function renderTask() {
         <div class="cell"><div class="k">${i18nT('destination')}</div><div class="v">${esc(t.destination.code)} — ${esc(t.destination.name)}</div></div>
         <div class="cell"><div class="k">${i18nT('estimated')}</div><div class="v">${fmtMin(t.admin_est_minutes)}</div></div>
       </div>
+      ${t.wheelchair ? `<div class="mt small"><span class="badge purple">♿ ${i18nT('chair')} ${esc(t.wheelchair.qr_code)}</span></div>` : ''}
+      ${t.next_action?.type === 'WHEELCHAIR_COLLECTED' ? `
+        <label>${i18nT('qr_label')}</label>
+        <div class="row">
+          <input id="qrInput" class="grow" placeholder="${i18nT('qr_placeholder')}"
+            autocapitalize="characters" autocomplete="off">
+          <button id="qrScanBtn">${i18nT('scan')}</button>
+        </div>
+        <div id="qrVideoWrap" style="display:none; margin-top:10px; border-radius:12px; overflow:hidden">
+          <video id="qrVideo" playsinline style="width:100%; display:block"></video>
+          <div class="small muted" style="text-align:center; padding:4px">${i18nT('scan_hint')}</div>
+        </div>` : ''}
       ${t.next_action ? `<button class="big mt ${t.next_action.type === 'COMPLETED' ? 'green' : ''}" id="nextBtn">
         ${esc(actionLabel(t.next_action.type))}</button>` : ''}
       ${done ? `<div class="mt" style="text-align:center">
@@ -251,18 +263,23 @@ function renderTask() {
       </div>` : ''}
     </div>`;
 
-  document.getElementById('back').onclick = () => { state.view = 'home'; render(); };
+  document.getElementById('back').onclick = () => { stopQrScan(); state.view = 'home'; render(); };
+  const qrScanBtn = document.getElementById('qrScanBtn');
+  if (qrScanBtn) qrScanBtn.onclick = () => startQrScan();
 
   const nextBtn = document.getElementById('nextBtn');
   if (nextBtn) nextBtn.onclick = async () => {
     nextBtn.disabled = true;
     const fix = lastFix();
+    const qr = document.getElementById('qrInput')?.value.trim();
     const body = {
       type: t.next_action.type,
       uuid: crypto.randomUUID(),
       client_time: new Date().toISOString(),
+      ...(qr ? { wheelchair_qr: qr } : {}),
       ...(fix ? { lat: fix.lat, lng: fix.lng } : {}),
     };
+    stopQrScan();
     try {
       await send(`/api/tasks/${t.id}/events`, body);
       // optimistic local update so the app works offline
@@ -299,6 +316,48 @@ function renderTask() {
         ${i18nT('distance')}: <b>${r.totals.distance_meters} m</b> ·
         SLA: <b>${r.totals.sla_state}</b>`;
     }).catch(() => {});
+  }
+}
+
+// ---------------- camera QR scanning (BarcodeDetector, with manual fallback) ----------------
+let qrStream = null, qrScanTimer = null;
+
+function stopQrScan() {
+  if (qrScanTimer) { clearInterval(qrScanTimer); qrScanTimer = null; }
+  if (qrStream) { qrStream.getTracks().forEach(tr => tr.stop()); qrStream = null; }
+  const wrap = document.getElementById('qrVideoWrap');
+  if (wrap) wrap.style.display = 'none';
+}
+
+async function startQrScan() {
+  const input = document.getElementById('qrInput');
+  const video = document.getElementById('qrVideo');
+  const wrap = document.getElementById('qrVideoWrap');
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
+    toast(i18nT('no_camera_qr'), true);
+    input?.focus();
+    return;
+  }
+  try {
+    const detector = new BarcodeDetector({ formats: ['qr_code', 'code_128'] });
+    qrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = qrStream;
+    await video.play();
+    wrap.style.display = 'block';
+    qrScanTimer = setInterval(async () => {
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          input.value = codes[0].rawValue;
+          if (navigator.vibrate) navigator.vibrate(100);
+          stopQrScan();
+        }
+      } catch { /* frame not ready */ }
+    }, 350);
+  } catch {
+    toast(i18nT('no_camera_qr'), true);
+    stopQrScan();
+    input?.focus();
   }
 }
 

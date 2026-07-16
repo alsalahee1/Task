@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS trackpoints (
   accuracy REAL,
   recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS wheelchairs (
+  id INTEGER PRIMARY KEY,
+  qr_code TEXT UNIQUE NOT NULL,
+  type TEXT NOT NULL DEFAULT 'MANUAL',
+  home_storage_id INTEGER REFERENCES locations(id),
+  status TEXT NOT NULL DEFAULT 'AVAILABLE'
+    CHECK (status IN ('AVAILABLE','IN_USE','MAINTENANCE')),
+  current_location_id INTEGER REFERENCES locations(id),
+  current_task_id INTEGER REFERENCES tasks(id)
+);
 CREATE TABLE IF NOT EXISTS flights (
   id INTEGER PRIMARY KEY,
   flight_number TEXT UNIQUE NOT NULL,
@@ -186,6 +196,8 @@ function migrate(db) {
   const cols = db.prepare('PRAGMA table_info(tasks)').all().map(c => c.name);
   if (!cols.includes('passenger_phone'))
     db.exec('ALTER TABLE tasks ADD COLUMN passenger_phone TEXT');
+  if (!cols.includes('wheelchair_id'))
+    db.exec('ALTER TABLE tasks ADD COLUMN wheelchair_id INTEGER REFERENCES wheelchairs(id)');
 }
 
 function seed(db) {
@@ -208,6 +220,20 @@ function seed(db) {
     'INSERT INTO route_templates (from_id, to_id, est_minutes) VALUES (?,?,?)');
   for (const [from, to, min] of SEED_TEMPLATES)
     insTpl.run(locId.get(from).id, locId.get(to).id, min);
+
+  // Wheelchair fleet: QR-tagged chairs parked at the two storage rooms.
+  const insChair = db.prepare(
+    `INSERT INTO wheelchairs (qr_code, type, home_storage_id, current_location_id)
+     VALUES (?,?,?,?)`);
+  for (const [qr, type, storage] of [
+    ['WC-S1-001', 'MANUAL', 'S1'], ['WC-S1-002', 'MANUAL', 'S1'],
+    ['WC-S1-003', 'AISLE', 'S1'], ['WC-S1-004', 'ELECTRIC', 'S1'],
+    ['WC-S2-001', 'MANUAL', 'S2'], ['WC-S2-002', 'MANUAL', 'S2'],
+    ['WC-S2-003', 'AISLE', 'S2'], ['WC-S2-004', 'CART', 'S2'],
+  ]) {
+    const sid = locId.get(storage).id;
+    insChair.run(qr, type, sid, sid);
+  }
 
   // Demo flight schedule (stands in for the AODB/FIDS feed).
   const insFlight = db.prepare(

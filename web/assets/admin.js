@@ -18,17 +18,20 @@ const state = {
   locations: [],
   templates: [],
   flights: [],
+  wheelchairs: [],
   summary: null,
   reportRange: { from: today(), to: today() },
 };
 function today() { return new Date().toISOString().slice(0, 10); }
 
 async function loadAll() {
-  const [tasks, agents, locations, templates, flights] = await Promise.all([
+  const [tasks, agents, locations, templates, flights, wheelchairs] = await Promise.all([
     API.get(`/api/tasks?date=${today()}`), API.get('/api/agents'),
     API.get('/api/locations'), API.get('/api/templates'), API.get('/api/flights'),
+    API.get('/api/wheelchairs'),
   ]);
   state.flights = flights;
+  state.wheelchairs = wheelchairs;
   const active = await API.get('/api/tasks?active=1'); // include older still-active tasks
   state.tasks = new Map([...tasks, ...active].map(t => [t.id, t]));
   state.agents = agents;
@@ -43,6 +46,11 @@ API.stream({
     const i = state.flights.findIndex(x => x.id === f.id);
     if (i >= 0) state.flights[i] = f; else state.flights.push(f);
     if (state.tab === 'flights') render();
+  },
+  wheelchair: w => {
+    const i = state.wheelchairs.findIndex(x => x.id === w.id);
+    if (i >= 0) state.wheelchairs[i] = w; else state.wheelchairs.push(w);
+    if (state.tab === 'wheelchairs') render();
   },
   agent: a => {
     const i = state.agents.findIndex(x => x.id === a.id);
@@ -74,7 +82,8 @@ const page = document.getElementById('page');
 
 function render() {
   ({ board, new: renderNew, map: renderMapTab, flights: renderFlights,
-     templates: renderTemplates, reports: renderReports, team: renderTeam })[state.tab]();
+     wheelchairs: renderWheelchairs, templates: renderTemplates,
+     reports: renderReports, team: renderTeam })[state.tab]();
 }
 
 // ---------- board ----------
@@ -151,7 +160,8 @@ async function openTask(id) {
     <div class="row mt" style="align-items:flex-start">
       <div class="grow" style="min-width:280px">
         <h3 class="small muted" style="text-transform:uppercase">Journey</h3>
-        <p>${t.storage ? `<b>${esc(t.storage.name)}</b> → ` : ''}<b>${esc(t.pickup.name)}</b> → <b>${esc(t.destination.name)}</b></p>
+        <p>${t.storage ? `<b>${esc(t.storage.name)}</b> → ` : ''}<b>${esc(t.pickup.name)}</b> → <b>${esc(t.destination.name)}</b>
+          ${t.wheelchair ? `<span class="badge purple">♿ ${esc(t.wheelchair.qr_code)}</span>` : ''}</p>
         <p class="small muted">Template estimate: <b>${fmtMin(t.template_est_minutes)}</b> ·
           Admin estimate: <b>${fmtMin(t.admin_est_minutes)}</b> ·
           SLA target: <b>${t.sla_target_minutes} min</b></p>
@@ -436,8 +446,26 @@ function renderFlights() {
         <td><select data-fstatus="${f.id}">
           ${FLIGHT_STATUSES.map(st => `<option ${st === f.status ? 'selected' : ''}>${st}</option>`).join('')}
         </select></td>
-        <td><button class="primary" data-fapply="${f.id}">Apply update</button></td>
-      </tr>`).join('')}
+        <td class="row">
+          <button class="primary" data-fapply="${f.id}">Apply update</button>
+          <button data-fssr="${f.id}">SSR list…</button>
+        </td>
+      </tr>
+      <tr id="ssrRow-${f.id}" style="display:none"><td colspan="6">
+        <div class="card" style="background:var(--panel-2)">
+          <b>Airline SSR passenger list for ${esc(f.flight_number)}</b>
+          <p class="muted small" style="margin:4px 0 8px">One passenger per line:
+            <code>Name, SSR code, phone (optional)</code> — e.g. <code>Omar Farouk, WCHR, +97150...</code>.
+            A task is created per passenger (${f.direction === 'ARRIVAL' ? 'gate → baggage claim' : 'check-in → gate'});
+            duplicates are skipped.</p>
+          <textarea data-ssrtext="${f.id}" rows="4" placeholder="Omar Farouk, WCHR, +971501234567&#10;Lina Haddad, WCHC"></textarea>
+          <div class="row mt">
+            <label class="row" style="margin:0; text-transform:none"><input type="checkbox" data-ssrauto="${f.id}" style="width:auto"> auto-assign agents</label>
+            <span class="grow"></span>
+            <button class="primary" data-ssrsend="${f.id}">Create tasks</button>
+          </div>
+        </div>
+      </td></tr>`).join('')}
       <tr>
         <td><input id="nfNum" placeholder="XY123" style="width:110px"></td>
         <td><select id="nfDir"><option>ARRIVAL</option><option>DEPARTURE</option></select></td>
@@ -465,6 +493,32 @@ function renderFlights() {
     } catch (ex) { toast(ex.message, true); }
   });
 
+  page.querySelectorAll('[data-fssr]').forEach(btn => btn.onclick = () => {
+    const row = document.getElementById(`ssrRow-${btn.dataset.fssr}`);
+    row.style.display = row.style.display === 'none' ? '' : 'none';
+  });
+
+  page.querySelectorAll('[data-ssrsend]').forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.ssrsend;
+    const lines = page.querySelector(`[data-ssrtext="${id}"]`).value
+      .split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return toast('Enter at least one passenger', true);
+    const passengers = lines.map(l => {
+      const [name, ssr, phone] = l.split(',').map(x => x.trim());
+      return { name, ssr_code: (ssr || 'WCHR').toUpperCase(), phone: phone || null };
+    });
+    try {
+      const r = await API.post(`/api/flights/${id}/ssrs`, {
+        passengers, auto_assign: page.querySelector(`[data-ssrauto="${id}"]`).checked,
+      });
+      toast(`${r.created.length} task(s) created` +
+        (r.skipped.length ? `, ${r.skipped.length} skipped (already exist)` : ''));
+      const fresh = await API.get(`/api/tasks?date=${today()}`);
+      for (const t of fresh) state.tasks.set(t.id, t);
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  });
+
   document.getElementById('nfAdd').onclick = async () => {
     const num = document.getElementById('nfNum').value.trim();
     if (!num) return toast('Flight number required', true);
@@ -477,6 +531,77 @@ function renderFlights() {
       });
       state.flights = await API.get('/api/flights');
       toast('Flight added');
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+}
+
+// ---------- wheelchairs ----------
+const CHAIR_BADGE = { AVAILABLE: 'green', IN_USE: 'blue', MAINTENANCE: 'amber' };
+
+function renderWheelchairs() {
+  const storages = state.locations.filter(l => l.type === 'STORAGE');
+  const counts = {};
+  for (const c of state.wheelchairs)
+    if (c.status === 'AVAILABLE' && c.current_location)
+      counts[c.current_location.code] = (counts[c.current_location.code] || 0) + 1;
+  page.innerHTML = `
+    <div class="stats" style="margin-bottom:14px">
+      ${storages.map(st => `<div class="card stat">
+        <div class="k">${esc(st.code)} — ${esc(st.name)}</div>
+        <div class="v">${counts[st.code] || 0}</div>
+        <div class="muted small">chairs available</div></div>`).join('')}
+      <div class="card stat"><div class="k">In use now</div>
+        <div class="v">${state.wheelchairs.filter(c => c.status === 'IN_USE').length}</div></div>
+      <div class="card stat"><div class="k">In maintenance</div>
+        <div class="v">${state.wheelchairs.filter(c => c.status === 'MAINTENANCE').length}</div></div>
+    </div>
+    <div class="card">
+    <div class="row spread"><h2>${tr('tab_wheelchairs')}</h2>
+      <span class="muted small">Agents scan the chair's QR label when collecting it —
+      that links the chair to the task and tracks where every chair ends up.</span></div>
+    <table><thead><tr><th>QR code</th><th>Type</th><th>Status</th><th>Location</th><th>On task</th><th></th></tr></thead>
+    <tbody>
+      ${state.wheelchairs.map(c => `<tr>
+        <td><b>${esc(c.qr_code)}</b></td>
+        <td>${esc(c.type)}</td>
+        <td><span class="badge ${CHAIR_BADGE[c.status] || ''}">${esc(c.status)}</span></td>
+        <td>${c.current_location ? esc(c.current_location.code) + ' — ' + esc(c.current_location.name)
+             : c.status === 'IN_USE' ? '<span class="muted">with agent</span>' : '<span class="muted">unknown</span>'}</td>
+        <td>${c.current_task_id ? `<a href="#" data-open-task="${c.current_task_id}">#${c.current_task_id}</a>` : '—'}</td>
+        <td>${c.status !== 'IN_USE' ? `<button data-chair-toggle="${c.id}" data-next="${c.status === 'MAINTENANCE' ? 'AVAILABLE' : 'MAINTENANCE'}">
+          ${c.status === 'MAINTENANCE' ? 'Back in service' : 'To maintenance'}</button>` : ''}</td>
+      </tr>`).join('')}
+      <tr>
+        <td><input id="ncQr" placeholder="WC-S1-005" style="width:130px"></td>
+        <td><select id="ncType"><option>MANUAL</option><option>ELECTRIC</option><option>AISLE</option><option>CART</option></select></td>
+        <td colspan="2"><select id="ncStorage">${storages.map(st => `<option value="${st.id}">${esc(st.code)} — ${esc(st.name)}</option>`).join('')}</select></td>
+        <td class="muted small">register chair</td>
+        <td><button class="primary" id="ncAdd">Add</button></td>
+      </tr>
+    </tbody></table>
+  </div>`;
+
+  page.querySelectorAll('[data-chair-toggle]').forEach(btn => btn.onclick = async () => {
+    try {
+      await API.post(`/api/wheelchairs/${btn.dataset.chairToggle}/status`,
+        { status: btn.dataset.next });
+      state.wheelchairs = await API.get('/api/wheelchairs');
+      toast('Wheelchair updated');
+      render();
+    } catch (ex) { toast(ex.message, true); }
+  });
+
+  document.getElementById('ncAdd').onclick = async () => {
+    const qr = document.getElementById('ncQr').value.trim();
+    if (!qr) return toast('QR code required', true);
+    try {
+      await API.post('/api/wheelchairs', {
+        qr_code: qr, type: document.getElementById('ncType').value,
+        home_storage_id: Number(document.getElementById('ncStorage').value),
+      });
+      state.wheelchairs = await API.get('/api/wheelchairs');
+      toast('Wheelchair registered');
       render();
     } catch (ex) { toast(ex.message, true); }
   };
