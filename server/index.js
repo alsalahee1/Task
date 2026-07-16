@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb, verifyPassword } from './db.js';
+import { openDb, verifyPassword, hashPassword } from './db.js';
 import { createNotifier } from './notify.js';
 import {
   nextStage, validateEvent, stagesFor, STAGE_ACTION_LABELS,
@@ -62,9 +62,57 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     return {
       id: u.id, username: u.username, name: u.name, role: u.role,
       skills: JSON.parse(u.skills || '[]'), on_duty: !!u.on_duty,
+      disabled: !!u.disabled, must_change_password: !!u.must_change_password,
+      created_at: u.created_at,
       last_lat: u.last_lat, last_lng: u.last_lng, last_seen: u.last_seen,
     };
   }
+
+  // ---------- session validation (sliding idle expiry + disabled check) ----------
+  const SESSION_IDLE_MS = 12 * 60 * 60 * 1000; // sign back in after 12h idle
+  function validateSession(token) {
+    if (!token) return null;
+    const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
+    if (!s) return null;
+    const lastSeen = Date.parse(s.last_seen_at || s.created_at);
+    if (Number.isFinite(lastSeen) && Date.now() - lastSeen > SESSION_IDLE_MS) {
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+      return null;
+    }
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id);
+    if (!u || u.disabled) {
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+      return null;
+    }
+    db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token = ?').run(now(), token);
+    return u;
+  }
+
+  // ---------- audit log ----------
+  function audit(actor, action, target, detail) {
+    db.prepare(
+      `INSERT INTO audit_log (at, actor_id, actor_name, action, target, detail)
+       VALUES (?,?,?,?,?,?)`)
+      .run(now(), actor?.id ?? null, actor?.name ?? 'system', action,
+        target ?? null, detail ?? null);
+  }
+
+  // ---------- login throttling (in-memory; per username+IP) ----------
+  const loginAttempts = new Map(); // key -> { count, firstAt, lockUntil }
+  const MAX_ATTEMPTS = 5, ATTEMPT_WINDOW_MS = 15 * 60 * 1000, LOCK_MS = 15 * 60 * 1000;
+  function loginKey(username, ip) { return `${(username || '').toLowerCase()}|${ip}`; }
+  function isLocked(key) {
+    const a = loginAttempts.get(key);
+    return a && a.lockUntil && a.lockUntil > Date.now();
+  }
+  function recordFailure(key) {
+    const a = loginAttempts.get(key) || { count: 0, firstAt: Date.now(), lockUntil: 0 };
+    if (Date.now() - a.firstAt > ATTEMPT_WINDOW_MS) { a.count = 0; a.firstAt = Date.now(); }
+    a.count++;
+    if (a.count >= MAX_ATTEMPTS) a.lockUntil = Date.now() + LOCK_MS;
+    loginAttempts.set(key, a);
+  }
+  function clearFailures(key) { loginAttempts.delete(key); }
 
   function legEstimate(fromId, toId) {
     if (!fromId || !toId || fromId === toId) return null;
@@ -443,25 +491,53 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
 
   // --- auth ---
   route('POST', /^\/api\/login$/, null, (req, res, m, body) => {
+    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      || req.socket?.remoteAddress || 'unknown';
+    const key = loginKey(body.username, ip);
+    if (isLocked(key))
+      return err(res, 429, 'Too many attempts. Try again in a few minutes.');
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.username || '');
-    if (!u || !verifyPassword(body.password || '', u.password_hash))
+    if (!u || !verifyPassword(body.password || '', u.password_hash)) {
+      recordFailure(key);
       return err(res, 401, 'Invalid username or password');
+    }
+    if (u.disabled) {
+      recordFailure(key);
+      return err(res, 403, 'This account has been disabled. Contact your dispatch admin.');
+    }
+    clearFailures(key);
     const token = randomBytes(32).toString('hex');
-    db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)')
-      .run(token, u.id, now());
+    db.prepare('INSERT INTO sessions (token, user_id, created_at, last_seen_at) VALUES (?,?,?,?)')
+      .run(token, u.id, now(), now());
+    audit(u, 'LOGIN', `user #${u.id}`, `from ${ip}`);
     json(res, 200, { token, user: publicUser(u) });
   });
 
-  route('POST', /^\/api\/logout$/, ['ADMIN', 'AGENT'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/logout$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, body, user) => {
     db.prepare('DELETE FROM sessions WHERE token = ?').run(user._token);
     json(res, 200, { ok: true });
   });
 
-  route('GET', /^\/api\/me$/, ['ADMIN', 'AGENT'], (req, res, m, b, user) =>
+  // Change own password. Any signed-in user; clears the must-change flag.
+  route('POST', /^\/api\/password$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, body, user) => {
+    const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    if (!verifyPassword(body.current || '', fresh.password_hash))
+      return err(res, 403, 'Current password is incorrect');
+    const next = String(body.new || '');
+    if (next.length < 6) return err(res, 400, 'New password must be at least 6 characters');
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
+      .run(hashPassword(next), user.id);
+    // Invalidate this user's OTHER sessions; keep the current one.
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(user.id, user._token);
+    audit(user, 'PASSWORD_CHANGE', `user #${user.id}`, null);
+    json(res, 200, { ok: true });
+  });
+
+  route('GET', /^\/api\/me$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, b, user) =>
     json(res, 200, publicUser(user)));
 
   // --- users / shift ---
-  route('GET', /^\/api\/agents$/, ['ADMIN', 'AGENT'], (req, res) => {
+  route('GET', /^\/api\/agents$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) => {
     const agents = db.prepare(`SELECT * FROM users WHERE role = 'AGENT' ORDER BY name`).all();
     json(res, 200, agents.map(publicUser));
   });
@@ -482,11 +558,94 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, { ok: true });
   });
 
+  // --- user / staff management (ADMIN only) ---
+  const VALID_ROLES = ['ADMIN', 'SUPERVISOR', 'AGENT'];
+  const countAdmins = () => db.prepare(
+    `SELECT COUNT(*) AS n FROM users WHERE role = 'ADMIN' AND disabled = 0`).get().n;
+
+  route('GET', /^\/api\/users$/, ['ADMIN'], (req, res) => {
+    const users = db.prepare('SELECT * FROM users ORDER BY role, name').all();
+    json(res, 200, users.map(publicUser));
+  });
+
+  route('POST', /^\/api\/users$/, ['ADMIN'], (req, res, m, body, actor) => {
+    const username = String(body.username || '').trim().toLowerCase();
+    const name = String(body.name || '').trim();
+    const role = body.role;
+    if (!username || !name) return err(res, 400, 'username and name are required');
+    if (!VALID_ROLES.includes(role)) return err(res, 400, 'Invalid role');
+    const password = String(body.password || '');
+    if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
+    const skills = Array.isArray(body.skills) ? body.skills : [];
+    try {
+      const r = db.prepare(
+        `INSERT INTO users (username, password_hash, name, role, skills, created_at,
+           must_change_password) VALUES (?,?,?,?,?,?,1)`)
+        .run(username, hashPassword(password), name, role, JSON.stringify(skills), now());
+      const created = db.prepare('SELECT * FROM users WHERE id = ?').get(r.lastInsertRowid);
+      audit(actor, 'USER_CREATE', `user #${created.id} (${username})`, `role ${role}`);
+      json(res, 201, publicUser(created));
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) return err(res, 409, 'That username is already taken');
+      console.error('USER_CREATE error:', e.message);
+      err(res, 500, 'Could not create user');
+    }
+  });
+
+  route('PATCH', /^\/api\/users\/(\d+)$/, ['ADMIN'], (req, res, m, body, actor) => {
+    const target = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(m[1]));
+    if (!target) return err(res, 404, 'User not found');
+    const changes = [];
+    let name = target.name, role = target.role, skills = target.skills,
+      disabled = target.disabled;
+    if (body.name != null && String(body.name).trim()) { name = String(body.name).trim(); changes.push('name'); }
+    if (body.role != null) {
+      if (!VALID_ROLES.includes(body.role)) return err(res, 400, 'Invalid role');
+      if (target.role === 'ADMIN' && body.role !== 'ADMIN' && countAdmins() <= 1)
+        return err(res, 409, 'Cannot change the role of the last active admin');
+      role = body.role; changes.push('role');
+    }
+    if (Array.isArray(body.skills)) { skills = JSON.stringify(body.skills); changes.push('skills'); }
+    if (body.disabled != null) {
+      const dis = body.disabled ? 1 : 0;
+      if (dis && target.id === actor.id) return err(res, 409, 'You cannot disable your own account');
+      if (dis && target.role === 'ADMIN' && countAdmins() <= 1)
+        return err(res, 409, 'Cannot disable the last active admin');
+      disabled = dis; changes.push(dis ? 'disabled' : 'enabled');
+    }
+    db.prepare('UPDATE users SET name = ?, role = ?, skills = ?, disabled = ? WHERE id = ?')
+      .run(name, role, skills, disabled, target.id);
+    if (disabled) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id);
+    audit(actor, 'USER_UPDATE', `user #${target.id} (${target.username})`, changes.join(', '));
+    json(res, 200, publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(target.id)));
+  });
+
+  // Admin reset: sets a temporary password the admin reads out; forces a change.
+  route('POST', /^\/api\/users\/(\d+)\/reset-password$/, ['ADMIN'], (req, res, m, body, actor) => {
+    const target = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(m[1]));
+    if (!target) return err(res, 404, 'User not found');
+    const temp = body.password && String(body.password).length >= 6
+      ? String(body.password)
+      : 'dnata-' + randomBytes(3).toString('hex');
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
+      .run(hashPassword(temp), target.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id);
+    audit(actor, 'PASSWORD_RESET', `user #${target.id} (${target.username})`, null);
+    json(res, 200, { ok: true, temporary_password: temp });
+  });
+
+  // --- audit log (ADMIN + SUPERVISOR) ---
+  route('GET', /^\/api\/audit$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+    const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?').all(limit);
+    json(res, 200, rows);
+  });
+
   // --- locations ---
-  route('GET', /^\/api\/locations$/, ['ADMIN', 'AGENT'], (req, res) =>
+  route('GET', /^\/api\/locations$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) =>
     json(res, 200, db.prepare('SELECT * FROM locations ORDER BY type, code').all()));
 
-  route('GET', /^\/api\/config$/, ['ADMIN', 'AGENT'], (req, res) =>
+  route('GET', /^\/api\/config$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) =>
     json(res, 200, { map_ref: mapRef }));
 
   route('POST', /^\/api\/locations$/, ['ADMIN'], (req, res, m, body) => {
@@ -510,7 +669,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   // seed walking times). When every location has lat/lng, the map projection is
   // refitted so the whole airport fills the map view, and meters_per_unit is set
   // so distance-based estimates stay honest.
-  route('POST', /^\/api\/locations\/import$/, ['ADMIN'], (req, res, m, body) => {
+  route('POST', /^\/api\/locations\/import$/, ['ADMIN'], (req, res, m, body, actor) => {
     const locs = Array.isArray(body.locations) ? body.locations : [];
     if (!locs.length) return err(res, 400, 'locations[] required');
     for (const l of locs) {
@@ -599,6 +758,9 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       }
     }
 
+    audit(actor, 'LOCATIONS_IMPORT', `${imported} locations`,
+      `${removed} removed, ${templatesUpserted} templates` +
+      (allGps && body.fit_map !== false ? ', map refitted' : ''));
     json(res, 200, {
       imported_locations: imported,
       removed_locations: removed,
@@ -609,7 +771,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   // --- templates ---
-  route('GET', /^\/api\/templates$/, ['ADMIN', 'AGENT'], (req, res) => {
+  route('GET', /^\/api\/templates$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) => {
     const rows = db.prepare(
       `SELECT t.*, f.code AS from_code, f.name AS from_name,
               d.code AS to_code, d.name AS to_name
@@ -619,7 +781,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, rows);
   });
 
-  route('PUT', /^\/api\/templates$/, ['ADMIN'], (req, res, m, body) => {
+  route('PUT', /^\/api\/templates$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body) => {
     const { from_id, to_id, est_minutes } = body;
     if (!from_id || !to_id || !(est_minutes > 0))
       return err(res, 400, 'from_id, to_id, est_minutes required');
@@ -632,23 +794,23 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, getTemplate.get(from_id, to_id));
   });
 
-  route('GET', /^\/api\/estimate$/, ['ADMIN'], (req, res, m, b, u, url) => {
+  route('GET', /^\/api\/estimate$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
     const q = url.searchParams;
     json(res, 200, estimateTask(
       Number(q.get('storage')) || null, Number(q.get('pickup')), Number(q.get('destination'))));
   });
 
   // --- flights (stands in for the AODB/FIDS feed; same shape a real feed adapter would use) ---
-  route('GET', /^\/api\/flights$/, ['ADMIN', 'AGENT'], (req, res) =>
+  route('GET', /^\/api\/flights$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) =>
     json(res, 200, db.prepare('SELECT * FROM flights ORDER BY sched_time').all().map(flightJson)));
 
-  route('GET', /^\/api\/flights\/lookup$/, ['ADMIN'], (req, res, m, b, u, url) => {
+  route('GET', /^\/api\/flights\/lookup$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
     const f = getFlightByNumber.get(url.searchParams.get('number') || '');
     if (!f) return err(res, 404, 'Unknown flight');
     json(res, 200, flightJson(f));
   });
 
-  route('POST', /^\/api\/flights$/, ['ADMIN'], (req, res, m, body) => {
+  route('POST', /^\/api\/flights$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body) => {
     const { flight_number, direction } = body;
     if (!flight_number || !['ARRIVAL', 'DEPARTURE'].includes(direction))
       return err(res, 400, 'flight_number and direction (ARRIVAL|DEPARTURE) required');
@@ -664,22 +826,23 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   // Feed update: gate change / delay / status. Gate changes cascade to active tasks.
-  route('POST', /^\/api\/flights\/(\d+)\/update$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/flights\/(\d+)\/update$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(Number(m[1]));
     if (!flight) return err(res, 404, 'Flight not found');
     if (body.gate_id && !getLoc.get(body.gate_id)) return err(res, 400, 'Unknown gate');
     const result = applyFlightUpdate(flight, body, user);
-    json(res, 200, {
-      flight: flightJson(db.prepare('SELECT * FROM flights WHERE id = ?').get(flight.id)),
-      ...result,
-    });
+    const fresh = db.prepare('SELECT * FROM flights WHERE id = ?').get(flight.id);
+    audit(user, 'FLIGHT_UPDATE', flight.flight_number,
+      `status ${fresh.status}` + (result.updated_tasks?.length
+        ? `; ${result.updated_tasks.length} task(s) retargeted` : ''));
+    json(res, 200, { flight: flightJson(fresh), ...result });
   });
 
   // --- wheelchair fleet ---
-  route('GET', /^\/api\/wheelchairs$/, ['ADMIN', 'AGENT'], (req, res) =>
+  route('GET', /^\/api\/wheelchairs$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) =>
     json(res, 200, db.prepare('SELECT * FROM wheelchairs ORDER BY qr_code').all().map(chairJson)));
 
-  route('POST', /^\/api\/wheelchairs$/, ['ADMIN'], (req, res, m, body) => {
+  route('POST', /^\/api\/wheelchairs$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body) => {
     const { qr_code, type, home_storage_id } = body;
     if (!qr_code) return err(res, 400, 'qr_code required');
     if (home_storage_id && !getLoc.get(home_storage_id)) return err(res, 400, 'Unknown storage');
@@ -694,7 +857,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   // Maintenance toggle / return to a storage room.
-  route('POST', /^\/api\/wheelchairs\/(\d+)\/status$/, ['ADMIN'], (req, res, m, body) => {
+  route('POST', /^\/api\/wheelchairs\/(\d+)\/status$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const chair = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(Number(m[1]));
     if (!chair) return err(res, 404, 'Wheelchair not found');
     if (chair.status === 'IN_USE') return err(res, 409, 'Chair is in use on a task');
@@ -705,6 +868,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     db.prepare('UPDATE wheelchairs SET status = ?, current_location_id = ? WHERE id = ?')
       .run(status, body.location_id ?? chair.current_location_id, chair.id);
     const fresh = db.prepare('SELECT * FROM wheelchairs WHERE id = ?').get(chair.id);
+    audit(user, 'WHEELCHAIR_STATUS', chair.qr_code, status);
     broadcast('wheelchair', chairJson(fresh));
     json(res, 200, chairJson(fresh));
   });
@@ -712,7 +876,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   // --- SSR intake: airline passenger-assistance manifest for a flight ---
   // Real feeds deliver SSR codes (WCHR/WCHS/WCHC) per passenger; this endpoint
   // accepts that list and turns each passenger into a task automatically.
-  route('POST', /^\/api\/flights\/(\d+)\/ssrs$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/flights\/(\d+)\/ssrs$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(Number(m[1]));
     if (!flight) return err(res, 404, 'Flight not found');
     if (!flight.gate_id) return err(res, 409, 'Flight has no gate assigned yet');
@@ -764,7 +928,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
   });
 
   // --- tasks ---
-  route('POST', /^\/api\/tasks$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/tasks$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const { passenger_name, pickup_id, destination_id, flight_direction } = body;
     if (!passenger_name || !pickup_id || !destination_id || !flight_direction)
       return err(res, 400, 'passenger_name, pickup_id, destination_id, flight_direction required');
@@ -798,7 +962,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 201, { ...taskJson(getTask(task.id)), auto_assign_result: autoResult ?? null });
   });
 
-  route('POST', /^\/api\/tasks\/(\d+)\/autoassign$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/tasks\/(\d+)\/autoassign$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     if (TERMINAL_STATUSES.includes(task.status)) return err(res, 409, `Task is ${task.status}`);
@@ -814,18 +978,21 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       `INSERT OR IGNORE INTO task_assignments (task_id, agent_id, role, assigned_at)
        VALUES (?,?,?,?)`);
     agentIds.forEach((id, i) => ins.run(task.id, id, i === 0 ? 'PRIMARY' : 'ASSIST', now()));
+    const names = agentIds
+      .map(id => db.prepare('SELECT name FROM users WHERE id = ?').get(id)?.name)
+      .filter(Boolean);
     if (task.status === 'CREATED') {
       db.prepare(`UPDATE tasks SET status = 'ASSIGNED' WHERE id = ?`).run(task.id);
       db.prepare(
         `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time)
          VALUES (?,?,?,?,?)`)
         .run(randomUUID(), task.id, byUser.id, 'ASSIGNED', now());
-      const first = db.prepare('SELECT name FROM users WHERE id = ?').get(agentIds[0]);
-      notifier.onTaskEvent(getTask(task.id), 'ASSIGNED', first?.name);
+      notifier.onTaskEvent(getTask(task.id), 'ASSIGNED', names[0]);
     }
+    audit(byUser, 'TASK_ASSIGN', `task #${task.id}`, names.join(', '));
   }
 
-  route('POST', /^\/api\/tasks\/(\d+)\/assign$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/tasks\/(\d+)\/assign$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     if (TERMINAL_STATUSES.includes(task.status))
@@ -841,7 +1008,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, taskJson(getTask(task.id)));
   });
 
-  route('GET', /^\/api\/tasks$/, ['ADMIN', 'AGENT'], (req, res, m, b, user, url) => {
+  route('GET', /^\/api\/tasks$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, b, user, url) => {
     const q = url.searchParams;
     let sql = 'SELECT DISTINCT t.* FROM tasks t';
     const where = [], params = [];
@@ -862,13 +1029,13 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, db.prepare(sql).all(...params).map(t => taskJson(t)));
   });
 
-  route('GET', /^\/api\/tasks\/(\d+)$/, ['ADMIN', 'AGENT'], (req, res, m, b, user) => {
+  route('GET', /^\/api\/tasks\/(\d+)$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, b, user) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     json(res, 200, taskJson(task, { withEvents: true }));
   });
 
-  route('POST', /^\/api\/tasks\/(\d+)\/events$/, ['ADMIN', 'AGENT'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/tasks\/(\d+)\/events$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m, body, user) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     if (user.role === 'AGENT' &&
@@ -911,7 +1078,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, { ok: true, task: taskJson(getTask(task.id)) });
   });
 
-  route('POST', /^\/api\/tasks\/(\d+)\/trackpoints$/, ['AGENT', 'ADMIN'],
+  route('POST', /^\/api\/tasks\/(\d+)\/trackpoints$/, ['AGENT', 'ADMIN', 'SUPERVISOR'],
     (req, res, m, body, user) => {
       const task = getTask(Number(m[1]));
       if (!task) return err(res, 404, 'Task not found');
@@ -933,7 +1100,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       json(res, 200, { ok: true, saved: n });
     });
 
-  route('POST', /^\/api\/tasks\/(\d+)\/cancel$/, ['ADMIN'], (req, res, m, body, user) => {
+  route('POST', /^\/api\/tasks\/(\d+)\/cancel$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     if (TERMINAL_STATUSES.includes(task.status)) return err(res, 409, `Task is ${task.status}`);
@@ -945,18 +1112,19 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
       `INSERT INTO task_events (uuid, task_id, agent_id, type, server_time, note)
        VALUES (?,?,?,?,?,?)`)
       .run(randomUUID(), task.id, user.id, 'CANCELLED', now(), body.reason);
+    audit(user, 'TASK_CANCEL', `task #${task.id}`, body.reason);
     pushTaskUpdate(task.id);
     json(res, 200, taskJson(getTask(task.id)));
   });
 
-  route('GET', /^\/api\/tasks\/(\d+)\/report$/, ['ADMIN', 'AGENT'], (req, res, m) => {
+  route('GET', /^\/api\/tasks\/(\d+)\/report$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
     json(res, 200, taskReport(task));
   });
 
   // --- summary reports ---
-  route('GET', /^\/api\/reports\/summary$/, ['ADMIN'], (req, res, m, b, u, url) => {
+  route('GET', /^\/api\/reports\/summary$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, b, u, url) => {
     const from = url.searchParams.get('from') || '0000';
     const to = url.searchParams.get('to')
       ? new Date(Date.parse(url.searchParams.get('to')) + 86400000).toISOString().slice(0, 10)
@@ -1047,7 +1215,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
 
     // Live stream (auth via query param because EventSource can't set headers).
     if (path === '/api/stream') {
-      const u = getUserByToken.get(url.searchParams.get('token') || '');
+      const u = validateSession(url.searchParams.get('token') || '');
       if (!u) return err(res, 401, 'Unauthorized');
       res.writeHead(200, {
         'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
@@ -1077,7 +1245,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
         let user = null;
         if (r.roles) {
           const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-          user = getUserByToken.get(token);
+          user = validateSession(token);
           if (!user) return err(res, 401, 'Unauthorized');
           if (!r.roles.includes(user.role)) return err(res, 403, 'Forbidden');
           user._token = token;

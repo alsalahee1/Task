@@ -6,12 +6,15 @@ import { initTheme, themeToggle } from '/assets/theme.js';
 
 applyDir();
 initTheme();
-const user = API.requireRole('ADMIN');
-document.getElementById('whoami').textContent = user.name;
+const user = API.requireRole('ADMIN', 'SUPERVISOR');
+const isAdmin = user.role === 'ADMIN';
+document.getElementById('whoami').textContent = `${user.name} · ${user.role}`;
 document.getElementById('logout').onclick = () => API.logout();
 themeToggle(document.getElementById('themeHost'));
 langToggle(document.getElementById('langHost'));
 document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
+// Audit tab is admin+supervisor; hide nothing role-specific beyond that here.
+document.getElementById('accountBtn').onclick = () => openPasswordModal();
 
 // ---------- state ----------
 const state = {
@@ -22,6 +25,8 @@ const state = {
   templates: [],
   flights: [],
   wheelchairs: [],
+  users: [],
+  audit: [],
   summary: null,
   mapTerminal: '',   // '' = whole airport
   reportRange: { from: today(), to: today() },
@@ -87,7 +92,8 @@ const page = document.getElementById('page');
 function render() {
   ({ board, new: renderNew, map: renderMapTab, flights: renderFlights,
      wheelchairs: renderWheelchairs, locations: renderLocations,
-     templates: renderTemplates, reports: renderReports, team: renderTeam })[state.tab]();
+     templates: renderTemplates, reports: renderReports, team: renderTeam,
+     audit: renderAudit })[state.tab]();
 }
 
 // ---------- board ----------
@@ -137,8 +143,40 @@ page.addEventListener('click', e => {
   if (card) openTask(Number(card.dataset.openTask));
 });
 
-// ---------- task detail modal ----------
+// ---------- modal helpers (shared; keyboard + focus accessible) ----------
 const modalHost = document.getElementById('modalHost');
+let lastFocused = null;
+
+function closeModal() {
+  modalHost.innerHTML = '';
+  document.removeEventListener('keydown', onModalKey);
+  if (lastFocused && lastFocused.focus) { try { lastFocused.focus(); } catch { /* gone */ } }
+}
+function onModalKey(e) {
+  if (e.key === 'Escape') { closeModal(); return; }
+  if (e.key !== 'Tab') return;
+  // simple focus trap within the open modal
+  const modal = modalHost.querySelector('.modal');
+  if (!modal) return;
+  const focusables = modal.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+  if (!focusables.length) return;
+  const first = focusables[0], last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+// Wire a freshly-rendered modal: Esc/backdrop close, trap focus, focus first field.
+function wireModalClose() {
+  lastFocused = document.activeElement;
+  const back = document.getElementById('modalBack');
+  const closeBtn = document.getElementById('closeModal');
+  if (closeBtn) closeBtn.onclick = closeModal;
+  if (back) back.onclick = e => { if (e.target.id === 'modalBack') closeModal(); };
+  document.addEventListener('keydown', onModalKey);
+  const modal = modalHost.querySelector('.modal');
+  const firstField = modal?.querySelector('input, select, textarea, button');
+  if (firstField) setTimeout(() => firstField.focus(), 0);
+}
 
 async function openTask(id) {
   const t = await API.get(`/api/tasks/${id}`);
@@ -147,10 +185,10 @@ async function openTask(id) {
   const onDuty = state.agents.filter(a => a.on_duty);
   const assignedIds = t.assignments.map(a => a.agent_id);
 
-  modalHost.innerHTML = `<div class="modal-back" id="modalBack"><div class="modal">
+  modalHost.innerHTML = `<div class="modal-back" id="modalBack"><div class="modal" role="dialog" aria-modal="true" aria-label="Task #${t.id} details">
     <div class="row spread">
       <h2 style="margin:0">Task #${t.id} — ${esc(t.passenger_name)}</h2>
-      <button id="closeModal">✕ Close</button>
+      <button id="closeModal" aria-label="Close">✕ Close</button>
     </div>
     <div class="row mt">
       <span class="badge blue">${esc(t.flight_number || '')} ${t.flight_direction}</span>
@@ -227,9 +265,7 @@ async function openTask(id) {
     highlight: [t.storage?.code, t.pickup.code, t.destination.code].filter(Boolean),
   });
 
-  document.getElementById('closeModal').onclick = close;
-  document.getElementById('modalBack').onclick = e => { if (e.target.id === 'modalBack') close(); };
-  function close() { modalHost.innerHTML = ''; }
+  wireModalClose();
 
   const assignBtn = document.getElementById('assignBtn');
   if (assignBtn) assignBtn.onclick = async () => {
@@ -240,7 +276,7 @@ async function openTask(id) {
       const updated = await API.post(`/api/tasks/${t.id}/assign`, { agent_ids: ids });
       state.tasks.set(updated.id, updated);
       toast('Agent(s) assigned');
-      close(); render();
+      closeModal(); render();
     } catch (ex) { toast(ex.message, true); }
   };
 
@@ -251,7 +287,7 @@ async function openTask(id) {
       state.tasks.set(r.task.id, r.task);
       toast(`Assigned to ${r.choice.agent.name} (${r.choice.distance_m} m away, ` +
         `${r.choice.active_tasks} active task(s))`);
-      close(); render();
+      closeModal(); render();
     } catch (ex) { toast(ex.message, true); }
   };
 
@@ -263,7 +299,7 @@ async function openTask(id) {
       const updated = await API.post(`/api/tasks/${t.id}/cancel`, { reason });
       state.tasks.set(updated.id, updated);
       toast('Task cancelled');
-      close(); render();
+      closeModal(); render();
     } catch (ex) { toast(ex.message, true); }
   };
 }
@@ -840,18 +876,137 @@ async function renderReports() {
 }
 
 // ---------- team ----------
-function renderTeam() {
-  page.innerHTML = `<div class="stats">${state.agents.map(a => `
-    <div class="card">
-      <div class="row spread"><b>${esc(a.name)}</b>
-        <span class="badge ${a.on_duty ? 'green' : ''}">${a.on_duty ? 'ON DUTY' : 'off duty'}</span></div>
-      <div class="muted small mt">@${esc(a.username)}
-        ${a.skills.length ? '· ' + a.skills.join(', ') : ''}</div>
-      <div class="muted small">Last seen: ${a.last_seen ? fmtTime(a.last_seen) : 'never'}</div>
-    </div>`).join('')}</div>`;
+const ALL_SKILLS = ['AISLE_CHAIR', 'TWO_PERSON_LIFT', 'ELECTRIC_CART'];
+const ROLE_BADGE = { ADMIN: 'red', SUPERVISOR: 'amber', AGENT: '' };
+
+async function renderTeam() {
+  // Admins get the full staff-management table; supervisors see a read-only roster.
+  if (isAdmin) {
+    try { state.users = await API.get('/api/users'); }
+    catch { /* keep prior */ }
+  }
+  const rows = isAdmin ? state.users : state.agents.map(a => ({ ...a }));
+  page.innerHTML = `<div class="card">
+    <div class="row spread"><h2>Staff</h2>
+      ${isAdmin ? '<button class="primary" id="addStaffBtn">＋ Add staff member</button>' : ''}</div>
+    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Skills</th>
+      <th>Status</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+    <tbody>${rows.map(u => `<tr>
+      <td><b>${esc(u.name)}</b></td>
+      <td class="muted">@${esc(u.username)}</td>
+      <td><span class="badge ${ROLE_BADGE[u.role] || ''}">${u.role}</span></td>
+      <td class="small">${u.skills?.length ? u.skills.join(', ') : '—'}</td>
+      <td>${u.disabled ? '<span class="badge red">disabled</span>'
+        : u.on_duty ? '<span class="badge green">on duty</span>'
+        : '<span class="badge">off duty</span>'}</td>
+      ${isAdmin ? `<td class="row" style="gap:6px">
+        <button data-edit-staff="${u.id}">Edit</button>
+        <button data-reset-staff="${u.id}">Reset password</button>
+      </td>` : ''}
+    </tr>`).join('')}</tbody></table>
+    ${isAdmin ? '' : '<p class="muted small mt">Only a dispatch admin can add or edit staff accounts.</p>'}
+  </div>`;
+
+  if (!isAdmin) return;
+  document.getElementById('addStaffBtn').onclick = () => openStaffModal(null);
+  page.querySelectorAll('[data-edit-staff]').forEach(b => b.onclick =
+    () => openStaffModal(state.users.find(u => u.id === Number(b.dataset.editStaff))));
+  page.querySelectorAll('[data-reset-staff]').forEach(b => b.onclick = async () => {
+    const u = state.users.find(x => x.id === Number(b.dataset.resetStaff));
+    if (!confirm(`Reset ${u.name}'s password? They'll be given a temporary one and must change it at next sign-in.`)) return;
+    try {
+      const r = await API.post(`/api/users/${u.id}/reset-password`, {});
+      alert(`Temporary password for ${u.name}:\n\n${r.temporary_password}\n\nShare it securely; they must change it when they sign in.`);
+    } catch (ex) { toast(ex.message, true); }
+  });
+}
+
+function openStaffModal(existing) {
+  const editing = !!existing;
+  modalHost.innerHTML = `<div class="modal-back" id="modalBack"><div class="modal" role="dialog" aria-modal="true" aria-label="${editing ? 'Edit staff member' : 'Add staff member'}" style="width:520px">
+    <div class="row spread"><h2 style="margin:0">${editing ? 'Edit staff member' : 'Add staff member'}</h2>
+      <button id="closeModal" aria-label="Close">✕</button></div>
+    <label>Full name</label><input id="stName" value="${esc(existing?.name || '')}">
+    ${editing ? '' : '<label>Username</label><input id="stUser" autocapitalize="none">'}
+    <label>Role</label>
+    <select id="stRole">${['AGENT', 'SUPERVISOR', 'ADMIN'].map(r =>
+      `<option ${existing?.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
+    <label>Skills</label>
+    <div class="row" style="gap:14px; margin-top:2px">${ALL_SKILLS.map(s => `
+      <label class="row" style="margin:0; text-transform:none; font-weight:500; gap:5px">
+        <input type="checkbox" style="width:auto" value="${s}" class="stSkill"
+          ${existing?.skills?.includes(s) ? 'checked' : ''}> ${s.replaceAll('_', ' ').toLowerCase()}</label>`).join('')}</div>
+    ${editing ? '' : '<label>Temporary password</label><input id="stPass" value="dnata123"><div class="muted small" style="margin-top:3px">They must change it at first sign-in.</div>'}
+    ${editing ? `<label>Account</label>
+      <label class="row" style="margin:0; text-transform:none; font-weight:500; gap:6px">
+        <input type="checkbox" id="stDisabled" style="width:auto" ${existing.disabled ? 'checked' : ''}> Account disabled</label>` : ''}
+    <button class="primary mt" style="width:100%" id="stSave">${editing ? 'Save changes' : 'Create account'}</button>
+  </div></div>`;
+  wireModalClose();
+  document.getElementById('stSave').onclick = async () => {
+    const skills = [...document.querySelectorAll('.stSkill:checked')].map(c => c.value);
+    const body = { name: stName.value.trim(), role: document.getElementById('stRole').value, skills };
+    try {
+      if (editing) {
+        body.disabled = document.getElementById('stDisabled').checked;
+        await API.patch(`/api/users/${existing.id}`, body);
+        toast('Staff member updated');
+      } else {
+        body.username = document.getElementById('stUser').value.trim();
+        body.password = document.getElementById('stPass').value;
+        await API.post('/api/users', body);
+        toast('Staff account created');
+      }
+      closeModal();
+      renderTeam();
+    } catch (ex) { toast(ex.message, true); }
+  };
+}
+
+// ---------- audit ----------
+async function renderAudit() {
+  try { state.audit = await API.get('/api/audit?limit=200'); }
+  catch (ex) { page.innerHTML = `<div class="card muted">${esc(ex.message)}</div>`; return; }
+  page.innerHTML = `<div class="card">
+    <div class="row spread"><h2>Audit log</h2>
+      <span class="muted small">Most recent 200 actions · who did what, when</span></div>
+    <table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+    <tbody>${state.audit.map(e => `<tr>
+      <td class="muted small" style="white-space:nowrap">${new Date(e.at).toLocaleString()}</td>
+      <td>${esc(e.actor_name)}</td>
+      <td><span class="badge">${esc(e.action)}</span></td>
+      <td class="small">${esc(e.target || '—')}</td>
+      <td class="small muted">${esc(e.detail || '')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No activity yet</td></tr>'}</tbody></table>
+  </div>`;
+}
+
+// ---------- change own password ----------
+function openPasswordModal(forced = false) {
+  modalHost.innerHTML = `<div class="modal-back" id="modalBack"><div class="modal" role="dialog" aria-modal="true" aria-label="${tr('change_password')}" style="width:440px">
+    <div class="row spread"><h2 style="margin:0">${forced ? tr('must_change_title') : tr('change_password')}</h2>
+      ${forced ? '' : '<button id="closeModal" aria-label="Close">✕</button>'}</div>
+    ${forced ? `<p class="small muted">${tr('must_change_hint')}</p>` : ''}
+    <label>${tr('current_password')}</label><input id="pwCur" type="password" autocomplete="current-password">
+    <label>${tr('new_password')}</label><input id="pwNew" type="password" autocomplete="new-password">
+    <div id="pwErr" style="color:var(--danger-fg); margin-top:8px; display:none; font-weight:600"></div>
+    <button class="primary mt" style="width:100%" id="pwSave">${tr('save')}</button>
+  </div></div>`;
+  if (!forced) wireModalClose();
+  document.getElementById('pwSave').onclick = async () => {
+    const errEl = document.getElementById('pwErr');
+    errEl.style.display = 'none';
+    try {
+      await API.post('/api/password', { current: pwCur.value, new: pwNew.value });
+      toast('Password changed');
+      closeModal();
+    } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
+  };
 }
 
 // ---------- boot ----------
 await loadAll();
 await initMap(API, terminals());
 render();
+// Force a password change for accounts flagged by an admin reset / first sign-in.
+if (user.must_change_password) openPasswordModal(true);

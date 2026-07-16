@@ -39,6 +39,16 @@ put the server behind any TLS reverse proxy for field use.
 
 ## What's implemented
 
+- **Accounts, roles & security**: three roles — **admin** (full control incl. staff
+  management and airport config), **supervisor** (dispatch + reports + audit, no user
+  management), **agent** (mobile app). Admins manage staff from the **Staff** tab
+  (create / edit / assign skills / disable / reset password); new accounts and resets
+  force a password change at next sign-in. Sessions expire after 12h idle and are
+  killed immediately when an account is disabled or its password changes; login is
+  rate-limited (locks after 5 failed attempts). An **Audit** tab records who did what
+  (logins, task assign/cancel, staff changes, flight/wheelchair/location edits) with
+  actor attribution. A **backup script** (`node setup/backup.mjs`) takes a
+  live-consistent snapshot of the database for scheduling via cron.
 - **Light & dark theme**: every screen (login, dispatch dashboard, agent app) follows
   the device's OS preference by default, with a one-tap toggle (sun/moon icon next to
   the language switch) to override it explicitly per device — the choice is only

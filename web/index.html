@@ -58,7 +58,8 @@
     document.getElementById('lblUser').textContent = t('username');
     document.getElementById('lblPass').textContent = t('password');
     document.getElementById('btnLogin').textContent = t('sign_in');
-    const go = user => location.href = user.role === 'ADMIN' ? '/admin' : '/agent';
+    const go = user => location.href =
+      (user.role === 'ADMIN' || user.role === 'SUPERVISOR') ? '/admin' : '/agent';
     if (API.token && API.user) go(API.user);
     document.getElementById('loginForm').addEventListener('submit', async e => {
       e.preventDefault();

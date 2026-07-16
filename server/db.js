@@ -20,15 +20,19 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   name TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('ADMIN','AGENT')),
+  role TEXT NOT NULL CHECK (role IN ('ADMIN','SUPERVISOR','AGENT')),
   skills TEXT NOT NULL DEFAULT '[]',
   on_duty INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
   last_lat REAL, last_lng REAL, last_seen TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT
 );
 CREATE TABLE IF NOT EXISTS locations (
   id INTEGER PRIMARY KEY,
@@ -139,6 +143,16 @@ CREATE TABLE IF NOT EXISTS notifications (
   status TEXT NOT NULL DEFAULT 'LOGGED',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  actor_id INTEGER,
+  actor_name TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(id DESC);
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_track_task ON trackpoints(task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -179,6 +193,7 @@ const SEED_TEMPLATES = [
 
 const SEED_USERS = [
   ['admin', 'admin123', 'Dispatch Admin', 'ADMIN', []],
+  ['omar', 'super123', 'Omar Al-Farsi', 'SUPERVISOR', []],
   ['ahmed', 'agent123', 'Ahmed Hassan', 'AGENT', ['TWO_PERSON_LIFT']],
   ['fatima', 'agent123', 'Fatima Ali', 'AGENT', ['AISLE_CHAIR']],
   ['john', 'agent123', 'John Okafor', 'AGENT', ['ELECTRIC_CART']],
@@ -197,20 +212,65 @@ export function openDb(path) {
 
 // Additive migrations for databases created by earlier versions.
 function migrate(db) {
-  const cols = db.prepare('PRAGMA table_info(tasks)').all().map(c => c.name);
-  if (!cols.includes('passenger_phone'))
+  const taskCols = db.prepare('PRAGMA table_info(tasks)').all().map(c => c.name);
+  if (!taskCols.includes('passenger_phone'))
     db.exec('ALTER TABLE tasks ADD COLUMN passenger_phone TEXT');
-  if (!cols.includes('wheelchair_id'))
+  if (!taskCols.includes('wheelchair_id'))
     db.exec('ALTER TABLE tasks ADD COLUMN wheelchair_id INTEGER REFERENCES wheelchairs(id)');
+
+  // Account-management columns on users.
+  const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+  if (!userCols.includes('disabled'))
+    db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0');
+  if (!userCols.includes('must_change_password'))
+    db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  if (!userCols.includes('created_at'))
+    db.exec('ALTER TABLE users ADD COLUMN created_at TEXT');
+
+  // Sliding-expiry timestamp on sessions.
+  const sessCols = db.prepare('PRAGMA table_info(sessions)').all().map(c => c.name);
+  if (!sessCols.includes('last_seen_at'))
+    db.exec('ALTER TABLE sessions ADD COLUMN last_seen_at TEXT');
+
+  // Widen the users.role CHECK to allow SUPERVISOR. SQLite can't ALTER a CHECK
+  // in place, so rebuild the table when the old definition is still present.
+  // FK enforcement is off (declarative only), so references stay intact.
+  const usersSql = db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).get()?.sql || '';
+  if (!usersSql.includes('SUPERVISOR')) {
+    db.exec(`
+      CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('ADMIN','SUPERVISOR','AGENT')),
+        skills TEXT NOT NULL DEFAULT '[]',
+        on_duty INTEGER NOT NULL DEFAULT 0,
+        disabled INTEGER NOT NULL DEFAULT 0,
+        must_change_password INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT,
+        last_lat REAL, last_lng REAL, last_seen TEXT
+      );
+      INSERT INTO users_new (id, username, password_hash, name, role, skills, on_duty,
+        disabled, must_change_password, created_at, last_lat, last_lng, last_seen)
+      SELECT id, username, password_hash, name, role, skills, on_duty,
+        disabled, must_change_password, created_at, last_lat, last_lng, last_seen FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+  }
 }
 
 function seed(db) {
   const hasUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
   if (hasUsers) return;
   const insUser = db.prepare(
-    'INSERT INTO users (username, password_hash, name, role, skills) VALUES (?,?,?,?,?)');
+    `INSERT INTO users (username, password_hash, name, role, skills, created_at)
+     VALUES (?,?,?,?,?,?)`);
+  const seedTime = new Date().toISOString();
   for (const [u, p, name, role, skills] of SEED_USERS)
-    insUser.run(u, hashPassword(p), name, role, JSON.stringify(skills));
+    insUser.run(u, hashPassword(p), name, role, JSON.stringify(skills), seedTime);
 
   const insLoc = db.prepare(
     'INSERT INTO locations (code, name, type, terminal, x, y, lat, lng) VALUES (?,?,?,?,?,?,?,?)');

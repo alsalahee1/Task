@@ -367,9 +367,46 @@ async function startQrScan() {
   }
 }
 
+// Forced password change (first sign-in / admin reset). Blocks the app until done.
+function renderForcedPasswordChange() {
+  stopGps();
+  app.innerHTML = `
+    <div class="row spread" style="margin-bottom:6px">
+      <img src="/assets/brand-logo.svg" alt="dnata" style="height:24px">
+    </div>
+    <div class="card mt">
+      <h2 style="margin:0 0 4px">${i18nT('must_change_title')}</h2>
+      <p class="small muted">${i18nT('must_change_hint')}</p>
+      <label>${i18nT('current_password')}</label>
+      <input id="fpCur" type="password" autocomplete="current-password">
+      <label>${i18nT('new_password')}</label>
+      <input id="fpNew" type="password" autocomplete="new-password">
+      <div id="fpErr" style="color:var(--danger-fg); margin-top:8px; display:none; font-weight:600"></div>
+      <button class="big mt" id="fpSave">${i18nT('save')}</button>
+    </div>`;
+  document.getElementById('fpSave').onclick = async () => {
+    const errEl = document.getElementById('fpErr');
+    errEl.style.display = 'none';
+    try {
+      await API.post('/api/password', {
+        current: document.getElementById('fpCur').value,
+        new: document.getElementById('fpNew').value,
+      });
+      me.must_change_password = false;
+      localStorage.setItem('aero_user', JSON.stringify(me));
+      toast(i18nT('task_done'));
+      render();
+    } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
+  };
+}
+
 // PWA service worker (best effort)
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 // boot
-await refresh();
-flushQueue();
+if (me.must_change_password) {
+  renderForcedPasswordChange();
+} else {
+  await refresh();
+  flushQueue();
+}

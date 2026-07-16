@@ -26,6 +26,7 @@ export const API = {
   get(path) { return this.req('GET', path); },
   post(path, body) { return this.req('POST', path, body); },
   put(path, body) { return this.req('PUT', path, body); },
+  patch(path, body) { return this.req('PATCH', path, body); },
 
   async login(username, password) {
     const data = await this.req('POST', '/api/login', { username, password });
@@ -41,8 +42,9 @@ export const API = {
     location.href = '/';
   },
 
-  requireRole(role) {
-    if (!this.token || !this.user || this.user.role !== role) {
+  requireRole(...roles) {
+    const allowed = roles.flat();
+    if (!this.token || !this.user || !allowed.includes(this.user.role)) {
       location.href = '/';
       throw new Error('redirecting to login');
     }
