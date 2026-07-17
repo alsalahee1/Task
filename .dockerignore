@@ -1,0 +1,9 @@
+.git
+node_modules
+data
+backups
+*.log
+.DS_Store
+.github
+docs
+tests
