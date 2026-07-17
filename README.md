@@ -39,6 +39,12 @@ put the server behind any TLS reverse proxy for field use.
 
 ## What's implemented
 
+- **Colour-coded task stages**: every task card is filled with one solid, opaque
+  colour for its current step, progressing grey → blue → purple → teal → **green when
+  completed** (red for cancelled), so a card's colour alone tells you how far along it
+  is at a glance — on the dispatch board, the agent app, and the dispatch wall. A
+  colour key sits above the board; inner chips flip to solid white so nothing is
+  faint, and text stays white for contrast in both light and dark themes.
 - **Passenger status page & rating**: every task mints an unguessable public link
   (`/status?t=…`, no login) the passenger can open on their phone — a branded, live
   page showing where their assistance is up to ("your assistant Ahmed has arrived to

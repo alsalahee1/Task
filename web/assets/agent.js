@@ -186,7 +186,7 @@ function renderHome() {
     </div>
     <h3 class="mt">${t('my_tasks')}</h3>
     ${sorted.map(t => `
-      <div class="card agent-task-card task-card" data-task="${t.id}">
+      <div class="card agent-task-card task-card st-${t.status}" data-task="${t.id}">
         <div class="row spread">
           <span class="badge blue">${esc(t.flight_number || t.flight_direction)}</span>
           ${t.priority !== 'NORMAL' ? `<span class="badge ${t.priority === 'URGENT' ? 'red' : 'amber'}">${t.priority}</span>` : ''}
@@ -251,7 +251,7 @@ function renderTask() {
       <h2 style="margin:10px 0 0">${esc(t.passenger_name)}</h2>
       ${t.passenger_notes ? `<p class="small" style="color:var(--warning-fg); margin:6px 0 0">📝 ${esc(t.passenger_notes)}</p>` : ''}
       ${stepper(t)}
-      <div class="stage-chip" style="font-size:14px">● ${statusLabel(t.status)}</div>
+      <div class="status-banner st-${t.status}">● ${statusLabel(t.status)}</div>
       <div class="big-timer" id="elapsed" data-since="${since}">--:--</div>
       <div class="info-grid">
         ${t.storage ? `<div class="cell"><div class="k">${i18nT('wheelchair_from')}</div><div class="v">${esc(t.storage.code)} — ${esc(t.storage.name)}</div></div>` : ''}

@@ -111,7 +111,7 @@ function taskCard(t) {
   const prio = t.priority !== 'NORMAL'
     ? `<span class="badge ${t.priority === 'URGENT' ? 'red' : 'amber'}">${t.priority}</span>` : '';
   const agents = t.assignments.map(a => esc(a.agent_name)).join(', ');
-  return `<div class="card task-card" data-open-task="${t.id}">
+  return `<div class="card task-card st-${t.status}" data-open-task="${t.id}">
     <div class="row spread">
       <span class="badge blue">${esc(t.flight_number || t.flight_direction)}</span>
       ${prio}
@@ -131,9 +131,20 @@ function taskCard(t) {
   </div>`;
 }
 
+// Order used for the colour key (matches the CSS progression).
+const STATUS_FLOW = ['CREATED', 'ASSIGNED', 'ACCEPTED', 'EN_ROUTE_TO_STORAGE',
+  'WHEELCHAIR_COLLECTED', 'ARRIVED_AT_PICKUP', 'PASSENGER_PICKED_UP', 'IN_TRANSIT',
+  'PASSENGER_DELIVERED', 'COMPLETED', 'CANCELLED'];
+
+function statusLegend() {
+  // Render a swatch per status by borrowing each card class's colour.
+  return `<div class="status-legend">${STATUS_FLOW.map(s =>
+    `<span class="lg"><span class="sw st-${s}" style="background:var(--stc)"></span>${statusLabel(s)}</span>`).join('')}</div>`;
+}
+
 function board() {
   const tasks = [...state.tasks.values()].sort((a, b) => b.id - a.id);
-  page.innerHTML = `<div class="board">` + COLS.map(([title, statuses]) => {
+  page.innerHTML = statusLegend() + `<div class="board">` + COLS.map(([title, statuses]) => {
     const items = tasks.filter(t => statuses.includes(t.status));
     return `<div class="col"><h3>${tr(title)} <span>${items.length}</span></h3>
       <div class="cards">${items.map(taskCard).join('') ||

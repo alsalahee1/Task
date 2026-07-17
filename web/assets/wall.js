@@ -44,7 +44,7 @@ function render() {
     else items = items.sort((a, b) => new Date(a.sla_deadline_at) - new Date(b.sla_deadline_at));
     return `<div class="wall-col"><h2>${title}<span>${items.length}</span></h2>
       <div class="cards">${items.map(t => `
-        <div class="wall-card ${slaClass(t)}">
+        <div class="wall-card task-card st-${t.status} ${slaClass(t)}">
           <div class="row spread">
             <span class="badge blue">${esc(t.flight_number || t.flight_direction)}</span>
             ${t.priority !== 'NORMAL' ? `<span class="badge ${t.priority === 'URGENT' ? 'red' : 'amber'}">${t.priority}</span>` : ''}

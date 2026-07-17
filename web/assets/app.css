@@ -235,6 +235,66 @@ label {
 .task-card .route { font-weight: 700; font-size: 15px; margin: 6px 0 4px; }
 .task-card .route em { color: var(--accent-2); font-style: normal; }
 
+/* ---------- task status colours ----------
+   Each stage fills the card with one solid, opaque colour that progresses
+   grey → blue → purple → teal → green as the task advances, so a card's colour
+   alone tells you how far along it is. Completed = green, cancelled = red.
+   Colours are dark enough that white text stays readable; inner chips flip to
+   solid white so nothing is faint or see-through. */
+.st-CREATED             { --stc: #5b6675; }  /* unassigned — slate */
+.st-ASSIGNED            { --stc: #2563eb; }  /* blue */
+.st-ACCEPTED            { --stc: #3f51d4; }  /* indigo */
+.st-EN_ROUTE_TO_STORAGE { --stc: #6d28d9; }  /* violet */
+.st-WHEELCHAIR_COLLECTED{ --stc: #8324c9; }  /* purple */
+.st-ARRIVED_AT_PICKUP   { --stc: #b8620a; }  /* amber-brown */
+.st-PASSENGER_PICKED_UP { --stc: #0f766e; }  /* teal */
+.st-IN_TRANSIT          { --stc: #0e7490; }  /* cyan */
+.st-PASSENGER_DELIVERED { --stc: #15803d; }  /* green-teal */
+.st-COMPLETED           { --stc: #16a34a; }  /* clear green */
+.st-CANCELLED           { --stc: #b91c1c; }  /* red */
+
+.task-card[class*="st-"] {
+  background: var(--stc);
+  border-color: rgba(0, 0, 0, .18);
+  color: #ffffff;
+}
+.task-card[class*="st-"]:hover { border-color: #ffffff; }
+.task-card[class*="st-"] .route,
+.task-card[class*="st-"] .route em,
+.task-card[class*="st-"] .pname,
+.task-card[class*="st-"] .pax,
+.task-card[class*="st-"] b { color: #ffffff; }
+.task-card[class*="st-"] .muted,
+.task-card[class*="st-"] .small { color: #eef3fb; }
+.task-card[class*="st-"] .stage-chip { color: #ffffff; }
+/* inner chips → solid white with the status colour as text (no transparency) */
+.task-card[class*="st-"] .badge {
+  background: #ffffff; color: var(--stc); border-color: #ffffff;
+}
+.task-card[class*="st-"] .badge.red    { color: #b91c1c; }
+.task-card[class*="st-"] .badge.amber  { color: #b45309; }
+.task-card[class*="st-"] .badge.green  { color: #15803d; }
+.task-card[class*="st-"] .badge.blue   { color: #1d4ed8; }
+.task-card[class*="st-"] .badge.purple { color: #7c3aed; }
+.task-card[class*="st-"] .sla-pill          { background: #ffffff; }
+.task-card[class*="st-"] .sla-pill.green    { color: #15803d; }
+.task-card[class*="st-"] .sla-pill.amber    { color: #b45309; }
+.task-card[class*="st-"] .sla-pill.red      { color: #b91c1c; }
+/* the mini progress stepper on a coloured card */
+.task-card[class*="st-"] .stepper .step { background: rgba(255, 255, 255, .35); }
+.task-card[class*="st-"] .stepper .step.done { background: #ffffff; }
+.task-card[class*="st-"] .stepper .step.current { background: #ffffff; }
+/* solid colour status banner (agent task detail) — turns green on completion */
+.status-banner {
+  display: inline-block; background: var(--stc, var(--accent)); color: #ffffff;
+  font-weight: 700; padding: 6px 16px; border-radius: 999px; font-size: 14px;
+  margin: 8px 0 2px;
+}
+/* a solid colour key so the palette is legible at a glance */
+.status-legend { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.status-legend .lg { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.status-legend .sw { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+
 .sla-pill {
   font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px;
   padding: 3px 10px; border-radius: 999px;
