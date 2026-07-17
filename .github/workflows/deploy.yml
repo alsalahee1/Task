@@ -1,0 +1,35 @@
+name: Deploy
+
+# Runs the test suite, then — only if it passes — has the VPS pull the new
+# code and redeploy itself. No manual terminal step needed after this is set
+# up: see deploy/README.md "Auto-deploy on push" for the one-time setup.
+on:
+  push:
+    branches: [ui-modernization]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH into the VPS and redeploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "curl -fsSL https://raw.githubusercontent.com/alsalahee1/task/ui-modernization/deploy/dokploy-run.sh | DOMAIN=aeroassist.online bash"

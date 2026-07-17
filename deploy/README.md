@@ -4,6 +4,50 @@ This puts the app online at **https://www.aeroassist.online** with a free
 auto-renewing HTTPS certificate. Tested for a Hostinger Ubuntu 24.04 VPS, but works
 on any Ubuntu 22.04/24.04 server.
 
+There are two ways to run the server-side script:
+
+- **This server already runs [Dokploy](https://dokploy.com)** (Traefik owns ports
+  80/443, and likely other apps like n8n live alongside AeroAssist) — use
+  [`dokploy-run.sh`](#auto-deploy-on-every-push-recommended) below. This is the setup
+  the live AeroAssist site actually runs on.
+- **A bare Ubuntu server with nothing else on it** — use `deploy.sh` (Steps 1–3
+  further down), which sets up its own nginx + systemd + certbot stack.
+
+## Auto-deploy on every push (recommended)
+
+Once this is set up, every `git push` to `ui-modernization` automatically tests the
+code and — only if the tests pass — redeploys the live site. No terminal paste
+needed after this one-time setup.
+
+**1. Create a deploy key restricted to only this one command** (so even if it
+   leaked, it could redeploy the app and nothing else — no shell, no other files):
+   on the server, run:
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+   cat >> ~/.ssh/authorized_keys <<'EOF'
+   command="curl -fsSL https://raw.githubusercontent.com/alsalahee1/task/ui-modernization/deploy/dokploy-run.sh | DOMAIN=aeroassist.online bash",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIrxKWDja/BC0EGOAAvgTmokgYacIzG61lsR3t9QFi5Y aeroassist-deploy
+   EOF
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+**2. Add three repository secrets** on GitHub — the repo's
+   **Settings → Secrets and variables → Actions → New repository secret**:
+
+   | Secret name | Value |
+   |---|---|
+   | `VPS_HOST` | `82.112.226.12` |
+   | `VPS_USER` | `root` |
+   | `VPS_SSH_KEY` | the matching private key (ask your assistant for it — it's paired to the public key above and is only ever meant to live in this GitHub secret, never committed to the repo) |
+
+**3. Push to `ui-modernization`.** The `Deploy` workflow
+   ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)) runs the test
+   suite, then SSHes in with that key — which, because of the forced `command=` above,
+   can only ever run the one redeploy command no matter what it's asked to run.
+
+To revoke auto-deploy later, delete that line from `~/.ssh/authorized_keys` on the
+server (or delete the `VPS_SSH_KEY` secret on GitHub).
+
 ## Step 1 — Point the domain at your server (do this first)
 
 At wherever you manage the domain's DNS (Hostinger → Domains → DNS/Nameservers),
