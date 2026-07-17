@@ -61,6 +61,18 @@ fi
 mkdir -p "$APP_DIR/data" "$APP_DIR/backups"
 
 # --- 4. systemd service -----------------------------------------------------
+# Node's built-in SQLite ships behind the --experimental-sqlite flag on some
+# 22.x/23.x builds and flagless on others. Detect which this Node needs so the
+# service starts either way instead of crashing on `import 'node:sqlite'`.
+NODE_BIN="$(command -v node)"
+if "$NODE_BIN" -e "require('node:sqlite')" >/dev/null 2>&1; then
+  SQLITE_FLAG=""
+  log "node:sqlite works without a flag on $(node -v)"
+else
+  SQLITE_FLAG="--experimental-sqlite"
+  log "node:sqlite needs --experimental-sqlite on $(node -v)"
+fi
+
 log "Installing systemd service"
 cat > /etc/systemd/system/aeroassist.service <<EOF
 [Unit]
@@ -72,7 +84,7 @@ Type=simple
 WorkingDirectory=$APP_DIR
 Environment=PORT=$PORT
 Environment=AERO_DB=$APP_DIR/data/aeroassist.db
-ExecStart=$(command -v node) server/index.js
+ExecStart=$NODE_BIN $SQLITE_FLAG server/index.js
 Restart=always
 RestartSec=3
 User=root
@@ -84,6 +96,10 @@ systemctl daemon-reload
 systemctl enable aeroassist
 systemctl restart aeroassist
 sleep 2
+if ! systemctl is-active --quiet aeroassist; then
+  echo "!! aeroassist did not start — recent log:"
+  journalctl -u aeroassist -n 20 --no-pager || true
+fi
 systemctl --no-pager --full status aeroassist | head -n 6 || true
 
 # --- 5. nginx reverse proxy (HTTP first; certbot adds HTTPS) ----------------

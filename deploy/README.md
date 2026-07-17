@@ -75,7 +75,15 @@ cd /opt/aeroassist && node setup/load-dxb.mjs
 
 - **Certbot failed / "DNS problem"** — the A records aren't pointing at the server
   yet. Wait for DNS, then re-run: `certbot --nginx -d aeroassist.online -d www.aeroassist.online`
-- **502 Bad Gateway** — the app service isn't running. Check: `systemctl status aeroassist`
-  and `journalctl -u aeroassist -n 50`.
+- **502 Bad Gateway / service won't start** — the app service isn't running. Check
+  `systemctl status aeroassist` and `journalctl -u aeroassist -n 50`. If the log shows
+  an error about `node:sqlite`, this Node build needs the experimental flag; re-running
+  the deploy script fixes it automatically, or patch it by hand:
+  ```bash
+  node -e "require('node:sqlite')" 2>/dev/null && FLAG="" || FLAG="--experimental-sqlite"
+  sed -i "s#^ExecStart=.*#ExecStart=$(command -v node) $FLAG server/index.js#" \
+    /etc/systemd/system/aeroassist.service
+  systemctl daemon-reload && systemctl restart aeroassist
+  ```
 - **Private repo** — if you later make the repo private, pass a GitHub token:
   `... | DOMAIN=aeroassist.online GITHUB_TOKEN=ghp_xxx bash`
