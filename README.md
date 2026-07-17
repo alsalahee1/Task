@@ -39,6 +39,22 @@ put the server behind any TLS reverse proxy for field use.
 
 ## What's implemented
 
+- **Passenger status page & rating**: every task mints an unguessable public link
+  (`/status?t=…`, no login) the passenger can open on their phone — a branded, live
+  page showing where their assistance is up to ("your assistant Ahmed has arrived to
+  meet you") and, once delivered, a 1–5 star rating with an optional comment that
+  flows back to the dispatcher and reports. The page only ever exposes the
+  passenger's first name — no phone, notes, or location.
+- **Dispatch wall** (`/wall`): a big, glanceable board for a dispatch-room screen —
+  live KPI tiles (active requests, at-risk/overdue, agents available, completed
+  today) and columns that update in real time, with at-risk tasks outlined amber/red.
+- **Multi-leg journeys**: a long transfer can be split into connecting legs handed
+  between agents at a waypoint (e.g. gate → border control by one agent, border →
+  baggage by another). Each leg is a full task with its own agent, timeline and SLA,
+  linked into one journey the passenger follows through a single status link.
+- **CI & error logging**: a GitHub Actions workflow runs the test suite on every
+  push/PR (zero-dependency, so no install step); unhandled server errors are logged
+  as structured JSON lines an ops log collector or monitor can ingest.
 - **Airline compliance & delay tracking**: the **Reports → Airline compliance** view
   breaks SLA performance down **per airline** — requests, compliance %, breaches, and
   how many breaches came with **late airline notification** (assistance notified less

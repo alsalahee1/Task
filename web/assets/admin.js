@@ -117,6 +117,7 @@ function taskCard(t) {
       ${prio}
       ${t.has_problem ? '<span class="badge red">⚠ problem</span>' : ''}
       ${t.late_notification ? '<span class="badge amber" title="Late airline notification">⚠ late notice</span>' : ''}
+      ${t.chain ? `<span class="badge purple" title="Multi-leg journey">leg ${t.leg_number}/${t.chain.length}</span>` : ''}
       <span class="grow"></span>
       <span data-sla-task="${t.id}">${slaPill(t)}</span>
     </div>
@@ -205,12 +206,22 @@ async function openTask(id) {
 
     <div class="row mt" style="align-items:flex-start">
       <div class="grow" style="min-width:280px">
-        <h3 class="small muted" style="text-transform:uppercase">Journey</h3>
+        ${t.chain ? `<h3 class="small muted" style="text-transform:uppercase">Journey · leg ${t.leg_number} of ${t.chain.length}</h3>
+          <div class="row" style="gap:4px; flex-wrap:wrap; margin-bottom:8px">
+            ${t.chain.map(c => `<span class="badge ${c.is_current ? 'blue' : ''}" title="${c.status}">
+              ${c.leg_number}. ${esc(c.pickup?.code || '')}→${esc(c.destination?.code || '')}
+              ${['COMPLETED'].includes(c.status) ? '✓' : ''}</span>`).join(' ')}
+          </div>` : '<h3 class="small muted" style="text-transform:uppercase">Journey</h3>'}
         <p>${t.storage ? `<b>${esc(t.storage.name)}</b> → ` : ''}<b>${esc(t.pickup.name)}</b> → <b>${esc(t.destination.name)}</b>
           ${t.wheelchair ? `<span class="badge purple">♿ ${esc(t.wheelchair.qr_code)}</span>` : ''}</p>
         <p class="small muted">Template estimate: <b>${fmtMin(t.template_est_minutes)}</b> ·
           Admin estimate: <b>${fmtMin(t.admin_est_minutes)}</b> ·
           SLA target: <b>${t.sla_target_minutes} min</b></p>
+        ${t.rating ? `<p class="small">Passenger rating: <b style="color:var(--gold)">${'★'.repeat(t.rating)}${'☆'.repeat(5 - t.rating)}</b>
+          ${t.rating_comment ? `<span class="muted">— “${esc(t.rating_comment)}”</span>` : ''}</p>` : ''}
+        ${t.public_token ? `<p class="small muted">Passenger status link:
+          <a href="/status?t=${esc(t.public_token)}" target="_blank">open</a>
+          <button class="small" data-copy-link="/status?t=${esc(t.public_token)}" style="padding:2px 8px">Copy</button></p>` : ''}
 
         <h3 class="small muted mt" style="text-transform:uppercase">Timeline</h3>
         <div class="timeline">${t.events.map(ev => `
@@ -264,6 +275,16 @@ async function openTask(id) {
             .map(r => `<option value="${r}" ${t.delay_reason === r ? 'selected' : ''}>${r.replaceAll('_', ' ').toLowerCase()}</option>`).join('')}
         </select>
         <button class="mt" style="width:100%" id="delaySave">Save delay reason</button>
+        ${!isDone ? `<h3 class="small muted mt" style="text-transform:uppercase">Connecting leg</h3>
+          <div class="row">
+            <select id="legDest" class="grow">
+              <option value="">handoff to…</option>
+              ${state.locations.filter(l => l.id !== t.destination_id)
+                .map(l => `<option value="${l.id}">${esc(l.code)} — ${esc(l.name)}</option>`).join('')}
+            </select>
+            <button id="addLegBtn">＋ Add leg</button>
+          </div>
+          <div class="small muted">Starts where this leg ends (${esc(t.destination.code)}) — for long transfers handed to another agent.</div>` : ''}
       </div>
     </div>
   </div></div>`;
@@ -338,6 +359,26 @@ async function openTask(id) {
         { reason: document.getElementById('delayReason').value || null });
       state.tasks.set(updated.id, updated);
       toast('Delay reason saved');
+      closeModal(); render();
+    } catch (ex) { toast(ex.message, true); }
+  };
+
+  const copyBtn = modalHost.querySelector('[data-copy-link]');
+  if (copyBtn) copyBtn.onclick = () => {
+    const url = location.origin + copyBtn.dataset.copyLink;
+    navigator.clipboard?.writeText(url).then(() => toast('Passenger link copied'),
+      () => toast(url));
+  };
+
+  const addLegBtn = document.getElementById('addLegBtn');
+  if (addLegBtn) addLegBtn.onclick = async () => {
+    const destId = Number(document.getElementById('legDest').value);
+    if (!destId) return toast('Choose where the next leg goes', true);
+    try {
+      const leg = await API.post(`/api/tasks/${t.id}/add-leg`, { destination_id: destId });
+      state.tasks.set(leg.id, leg);
+      state.tasks.set(t.id, await API.get(`/api/tasks/${t.id}`));
+      toast(`Leg ${leg.leg_number} added — assign an agent to it`);
       closeModal(); render();
     } catch (ex) { toast(ex.message, true); }
   };

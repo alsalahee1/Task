@@ -86,7 +86,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   completed_at TEXT,
   notified_at TEXT,
   late_notification INTEGER NOT NULL DEFAULT 0,
-  delay_reason TEXT
+  delay_reason TEXT,
+  public_token TEXT,
+  rating INTEGER,
+  rating_comment TEXT,
+  parent_task_id INTEGER REFERENCES tasks(id),
+  leg_number INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS task_assignments (
   id INTEGER PRIMARY KEY,
@@ -227,6 +232,16 @@ function migrate(db) {
     db.exec('ALTER TABLE tasks ADD COLUMN late_notification INTEGER NOT NULL DEFAULT 0');
   if (!taskCols.includes('delay_reason'))
     db.exec('ALTER TABLE tasks ADD COLUMN delay_reason TEXT');
+  if (!taskCols.includes('public_token'))
+    db.exec('ALTER TABLE tasks ADD COLUMN public_token TEXT');
+  if (!taskCols.includes('rating'))
+    db.exec('ALTER TABLE tasks ADD COLUMN rating INTEGER');
+  if (!taskCols.includes('rating_comment'))
+    db.exec('ALTER TABLE tasks ADD COLUMN rating_comment TEXT');
+  if (!taskCols.includes('parent_task_id'))
+    db.exec('ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)');
+  if (!taskCols.includes('leg_number'))
+    db.exec('ALTER TABLE tasks ADD COLUMN leg_number INTEGER NOT NULL DEFAULT 1');
 
   // Account-management columns on users.
   const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);

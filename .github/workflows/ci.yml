@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # No dependencies to install — the app is zero-dependency (node:sqlite, node:http).
+      - name: Run backend test suite
+        run: npm test

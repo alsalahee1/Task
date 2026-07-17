@@ -185,6 +185,47 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     return m ? m[1] : '—';
   }
 
+  // Capability token for the passenger's public status link (unguessable URL).
+  function ensurePublicToken(taskId) {
+    const t = db.prepare('SELECT public_token FROM tasks WHERE id = ?').get(taskId);
+    if (t && !t.public_token) {
+      const token = randomBytes(16).toString('hex');
+      db.prepare('UPDATE tasks SET public_token = ? WHERE id = ?').run(token, taskId);
+      return token;
+    }
+    return t?.public_token || null;
+  }
+
+  // Minimal, passenger-safe view of a task for the public status page. Deliberately
+  // omits phone, notes, GPS, IDs — only what the passenger should see about their help.
+  function publicTaskView(task) {
+    const assignments = taskAssignments(task.id);
+    const agentFirst = assignments[0]?.agent_name?.split(' ')[0] || null;
+    const STATUS_TEXT = {
+      CREATED: 'We have your assistance request.',
+      ASSIGNED: 'An assistant has been assigned to you.',
+      ACCEPTED: 'Your assistant is preparing to come to you.',
+      EN_ROUTE_TO_STORAGE: 'Your assistant is collecting a wheelchair.',
+      WHEELCHAIR_COLLECTED: 'Your assistant is on the way to you.',
+      ARRIVED_AT_PICKUP: 'Your assistant has arrived to meet you.',
+      PASSENGER_PICKED_UP: 'You are with your assistant.',
+      IN_TRANSIT: 'On the way to your destination.',
+      PASSENGER_DELIVERED: 'You have arrived at your destination.',
+      COMPLETED: 'Your assistance is complete. Thank you!',
+      CANCELLED: 'This assistance request was cancelled.',
+    };
+    return {
+      passenger_first_name: (task.passenger_name || '').split(' ')[0],
+      flight_number: task.flight_number,
+      status: task.status,
+      status_text: STATUS_TEXT[task.status] || 'Your assistance is in progress.',
+      agent_first_name: agentFirst,
+      destination: locBrief(task.destination_id)?.name || null,
+      can_rate: ['PASSENGER_DELIVERED', 'COMPLETED'].includes(task.status),
+      rating: task.rating ?? null,
+    };
+  }
+
   function taskJson(task, { withEvents = false } = {}) {
     const next = nextStage(task);
     const out = {
@@ -202,6 +243,18 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
         `SELECT 1 FROM task_events WHERE task_id = ? AND type IN ('PROBLEM_REPORTED','ESCALATED') LIMIT 1`
       ).get(task.id),
     };
+    // Multi-leg journey chain (only when this task is part of one).
+    const rootId = task.parent_task_id || task.id;
+    const chain = db.prepare(
+      `SELECT id, leg_number, status, pickup_id, destination_id FROM tasks
+       WHERE id = ? OR parent_task_id = ? ORDER BY leg_number`).all(rootId, rootId);
+    if (chain.length > 1) {
+      out.chain = chain.map(c => ({
+        id: c.id, leg_number: c.leg_number, status: c.status,
+        pickup: locBrief(c.pickup_id), destination: locBrief(c.destination_id),
+        is_current: c.id === task.id,
+      }));
+    }
     if (withEvents) {
       out.events = taskEvents(task.id);
       out.trackpoints = db.prepare(
@@ -672,6 +725,29 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, rows);
   });
 
+  // --- public passenger status (no auth; capability token in the URL) ---
+  const getTaskByToken = t => db.prepare('SELECT * FROM tasks WHERE public_token = ?').get(t);
+
+  route('GET', /^\/api\/public\/task\/([a-f0-9]{16,64})$/, null, (req, res, m) => {
+    const task = getTaskByToken(m[1]);
+    if (!task) return err(res, 404, 'Not found');
+    json(res, 200, publicTaskView(task));
+  });
+
+  route('POST', /^\/api\/public\/task\/([a-f0-9]{16,64})\/rating$/, null, (req, res, m, body) => {
+    const task = getTaskByToken(m[1]);
+    if (!task) return err(res, 404, 'Not found');
+    if (!['PASSENGER_DELIVERED', 'COMPLETED'].includes(task.status))
+      return err(res, 409, 'You can rate once your assistance is complete');
+    const stars = Number(body.stars);
+    if (!Number.isInteger(stars) || stars < 1 || stars > 5)
+      return err(res, 400, 'Please give a rating from 1 to 5 stars');
+    db.prepare('UPDATE tasks SET rating = ?, rating_comment = ? WHERE id = ?')
+      .run(stars, String(body.comment || '').slice(0, 500) || null, task.id);
+    pushTaskUpdate(task.id);
+    json(res, 200, { ok: true });
+  });
+
   // --- locations ---
   route('GET', /^\/api\/locations$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res) =>
     json(res, 200, db.prepare('SELECT * FROM locations ORDER BY type, code').all()));
@@ -954,6 +1030,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
           new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString(),
           notifiedAt, lateFlag);
       const task = getTask(r.lastInsertRowid);
+      ensurePublicToken(task.id);
       let autoResult = null;
       if (body.auto_assign) autoResult = autoAssign(task, user);
       pushTaskUpdate(task.id);
@@ -995,6 +1072,7 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
         est.total_minutes, Number(body.admin_est_minutes) || est.total_minutes,
         slaTarget, deadline, notifiedAt, lateFlag);
     const task = getTask(r.lastInsertRowid);
+    ensurePublicToken(task.id);
     let autoResult;
     if (Array.isArray(body.agent_ids) && body.agent_ids.length) assign(task, body.agent_ids, user);
     else if (body.auto_assign) autoResult = autoAssign(task, user);
@@ -1206,6 +1284,46 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
     json(res, 200, taskJson(getTask(task.id)));
   });
 
+  // Multi-leg journey: add a connecting leg that starts where this task ends.
+  // Each leg is a full task (own agent, timeline, SLA) linked by parent_task_id,
+  // so a long transfer can be handed between agents at a waypoint. The root task
+  // holds the whole chain; leg_number increments along it.
+  route('POST', /^\/api\/tasks\/(\d+)\/add-leg$/, ['ADMIN', 'SUPERVISOR'], (req, res, m, body, user) => {
+    const prev = getTask(Number(m[1]));
+    if (!prev) return err(res, 404, 'Task not found');
+    const destinationId = Number(body.destination_id);
+    if (!getLoc.get(destinationId)) return err(res, 400, 'Unknown destination');
+    // The new leg starts at the previous leg's destination (the handoff point).
+    const pickupId = prev.destination_id;
+    if (pickupId === destinationId) return err(res, 400, 'Leg destination must differ from the handoff point');
+    const rootId = prev.parent_task_id || prev.id;
+    const legNumber = (prev.leg_number || 1) + 1;
+    const est = estimateTask(body.storage_id || null, pickupId, destinationId);
+    const slaTarget = Number(body.sla_target_minutes) || SLA_DEFAULTS[prev.flight_direction] || 30;
+    const createdAt = now();
+    const r = db.prepare(
+      `INSERT INTO tasks (created_by, created_at, passenger_name, passenger_phone,
+        passenger_notes, ssr_code, wheelchair_type, flight_number, flight_direction,
+        flight_time, priority, storage_id, pickup_id, destination_id,
+        template_est_minutes, admin_est_minutes, sla_target_minutes, sla_deadline_at,
+        notified_at, parent_task_id, leg_number, public_token)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(user.id, createdAt, prev.passenger_name, prev.passenger_phone,
+        body.passenger_notes || prev.passenger_notes,
+        prev.ssr_code, prev.wheelchair_type, prev.flight_number, prev.flight_direction,
+        prev.flight_time, prev.priority, body.storage_id || null, pickupId, destinationId,
+        est.total_minutes, Number(body.admin_est_minutes) || est.total_minutes,
+        slaTarget, new Date(Date.parse(createdAt) + slaTarget * 60000).toISOString(),
+        createdAt, rootId, legNumber, prev.public_token);
+    const leg = getTask(r.lastInsertRowid);
+    if (Array.isArray(body.agent_ids) && body.agent_ids.length) assign(leg, body.agent_ids.map(Number), user);
+    else if (body.auto_assign) autoAssign(leg, user);
+    audit(user, 'ADD_LEG', `task #${prev.id}`, `leg ${legNumber} → ${getLoc.get(destinationId).code}`);
+    pushTaskUpdate(leg.id);
+    pushTaskUpdate(prev.id);
+    json(res, 201, taskJson(getTask(leg.id)));
+  });
+
   route('GET', /^\/api\/tasks\/(\d+)\/report$/, ['ADMIN', 'SUPERVISOR', 'AGENT'], (req, res, m) => {
     const task = getTask(Number(m[1]));
     if (!task) return err(res, 404, 'Task not found');
@@ -1389,7 +1507,14 @@ export function createApp({ dbPath = join(ROOT, 'data', 'aeroassist.db') } = {})
           user._token = token;
         }
         try { return r.handler(req, res, m, body, user, url); }
-        catch (e) { console.error(e); return err(res, 500, 'Internal error'); }
+        catch (e) {
+          // Structured error line an ops log collector / monitor can ingest.
+          console.error(JSON.stringify({
+            level: 'error', at: now(), method: req.method, path,
+            actor: user?.username || null, message: e.message, stack: e.stack,
+          }));
+          return err(res, 500, 'Internal error');
+        }
       }
       err(res, 404, 'Not found');
     });

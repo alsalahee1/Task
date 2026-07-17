@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c1220" id="themeColorMeta">
+  <title>Your assistance — dnata</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('aero_theme');
+      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+  <style>
+    .status-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .status-card { width: 440px; max-width: 100%; text-align: center; }
+    .status-emoji { font-size: 52px; margin: 6px 0; }
+    .pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+      background: var(--brand-green); margin-inline-end: 6px; animation: pulse 1.3s infinite; }
+    .stars { display: flex; gap: 6px; justify-content: center; margin: 8px 0 14px; }
+    .stars button { font-size: 32px; line-height: 1; padding: 2px 6px; background: none; border: none; color: var(--muted); }
+    .stars button.on { color: var(--gold); }
+    .steps { display: flex; gap: 4px; margin: 16px 0; }
+    .steps .s { flex: 1; height: 6px; border-radius: 3px; background: var(--panel-2); }
+    .steps .s.done { background: var(--brand-green); }
+    .steps .s.cur { background: var(--accent); animation: pulse 1.4s infinite; }
+  </style>
+</head>
+<body>
+  <div class="status-wrap">
+    <div class="card status-card" id="card">
+      <img src="/assets/brand-logo.svg" alt="dnata" class="brand-logo-lg">
+      <div class="muted small" style="letter-spacing:.12em; text-transform:uppercase">Assisted travel</div>
+      <div id="body" class="mt"><div class="muted">Loading your assistance status…</div></div>
+    </div>
+  </div>
+  <script type="module">
+    import { esc } from '/assets/api.js';
+    const token = new URLSearchParams(location.search).get('t');
+    const body = document.getElementById('body');
+    const ORDER = ['ASSIGNED', 'ACCEPTED', 'WHEELCHAIR_COLLECTED', 'ARRIVED_AT_PICKUP',
+      'PASSENGER_PICKED_UP', 'IN_TRANSIT', 'PASSENGER_DELIVERED', 'COMPLETED'];
+    const EMOJI = {
+      CREATED: '📝', ASSIGNED: '🙋', ACCEPTED: '🚶', EN_ROUTE_TO_STORAGE: '♿',
+      WHEELCHAIR_COLLECTED: '♿', ARRIVED_AT_PICKUP: '👋', PASSENGER_PICKED_UP: '🤝',
+      IN_TRANSIT: '➡️', PASSENGER_DELIVERED: '✅', COMPLETED: '🎉', CANCELLED: '🚫',
+    };
+
+    if (!token) body.innerHTML = '<div class="muted">This link is missing its code.</div>';
+
+    let rated = false;
+    async function load() {
+      if (!token) return;
+      let d;
+      try {
+        const res = await fetch(`/api/public/task/${encodeURIComponent(token)}`);
+        if (!res.ok) throw new Error();
+        d = await res.json();
+      } catch {
+        body.innerHTML = '<div class="muted">We couldn’t find this assistance request.</div>';
+        return;
+      }
+      const idx = ORDER.indexOf(d.status);
+      const steps = d.status === 'CANCELLED' ? '' : `<div class="steps">${ORDER.slice(0, 7).map((s, i) =>
+        `<div class="s ${i < idx ? 'done' : i === idx ? 'cur' : ''}"></div>`).join('')}</div>`;
+      body.innerHTML = `
+        <div class="status-emoji">${EMOJI[d.status] || '♿'}</div>
+        <h1 style="margin:.2em 0">Hello${d.passenger_first_name ? ', ' + esc(d.passenger_first_name) : ''}</h1>
+        ${d.flight_number ? `<div class="muted small">Flight ${esc(d.flight_number)}</div>` : ''}
+        ${steps}
+        <p style="font-size:17px; font-weight:600">
+          ${d.status !== 'COMPLETED' && d.status !== 'CANCELLED' ? '<span class="pulse-dot"></span>' : ''}
+          ${esc(d.status_text)}</p>
+        ${d.agent_first_name && !['COMPLETED', 'CANCELLED'].includes(d.status)
+          ? `<div class="muted">Your assistant is <b>${esc(d.agent_first_name)}</b></div>` : ''}
+        ${d.destination ? `<div class="muted small mt">Destination: ${esc(d.destination)}</div>` : ''}
+        <div id="rateBox" class="mt"></div>`;
+
+      const rateBox = document.getElementById('rateBox');
+      if (d.rating) {
+        rateBox.innerHTML = `<div class="muted small">You rated this ${'★'.repeat(d.rating)}${'☆'.repeat(5 - d.rating)} — thank you!</div>`;
+      } else if (d.can_rate && !rated) {
+        rateBox.innerHTML = `<h3 style="margin:6px 0">How was your assistance?</h3>
+          <div class="stars" id="stars">${[1, 2, 3, 4, 5].map(n => `<button data-n="${n}" aria-label="${n} stars">★</button>`).join('')}</div>
+          <textarea id="comment" rows="2" placeholder="Add a comment (optional)"></textarea>
+          <button class="primary mt" style="width:100%" id="sendRate" disabled>Submit rating</button>`;
+        let chosen = 0;
+        const starEls = [...rateBox.querySelectorAll('.stars button')];
+        starEls.forEach(b => b.onclick = () => {
+          chosen = Number(b.dataset.n);
+          starEls.forEach(s => s.classList.toggle('on', Number(s.dataset.n) <= chosen));
+          document.getElementById('sendRate').disabled = false;
+        });
+        document.getElementById('sendRate').onclick = async () => {
+          try {
+            const res = await fetch(`/api/public/task/${encodeURIComponent(token)}/rating`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ stars: chosen, comment: document.getElementById('comment').value }),
+            });
+            if (!res.ok) throw new Error();
+            rated = true;
+            rateBox.innerHTML = '<div style="font-weight:600; color:var(--brand-green)">Thank you for your feedback! 🙏</div>';
+          } catch {
+            rateBox.innerHTML += '<div class="small" style="color:var(--danger-fg)">Could not submit — please try again.</div>';
+          }
+        };
+      }
+    }
+    load();
+    // Live-ish: poll while the journey is active.
+    setInterval(load, 10000);
+  </script>
+</body>
+</html>

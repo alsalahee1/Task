@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AeroAssist — Dispatch Wall</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('aero_theme');
+      if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+  <style>
+    /* A big, glanceable board for a dispatch-room screen. */
+    body { overflow-x: hidden; }
+    .wall-top { display: flex; align-items: center; gap: 20px; padding: 14px 26px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      border-top: 3px solid var(--accent);
+      border-image: linear-gradient(90deg, var(--accent) 70%, var(--brand-green)) 1; }
+    .wall-top .clock { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 20px 26px; }
+    .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; box-shadow: var(--shadow-sm); }
+    .kpi .k { color: var(--muted); font-size: 15px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+    .kpi .v { font-size: 54px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.05; margin-top: 4px; letter-spacing: -.02em; }
+    .wall-board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; padding: 0 26px 26px; align-items: start; }
+    .wall-col h2 { font-size: 18px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; justify-content: space-between; }
+    .wall-col .cards { display: flex; flex-direction: column; gap: 12px; }
+    .wall-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow-sm); }
+    .wall-card.at-risk { border-color: var(--amber); }
+    .wall-card.over { border-color: var(--red); }
+    .wall-card .pax { font-size: 20px; font-weight: 800; margin: 4px 0; letter-spacing: -.01em; }
+    .wall-card .route { font-size: 15px; color: var(--muted); }
+    .wall-card .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+    .wall-card .sla { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .idle { color: var(--muted); font-size: 15px; padding: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wall-top">
+    <img src="/assets/brand-logo.svg" alt="dnata" style="height:34px">
+    <div class="logo" style="font-size:20px">Aero<span>Assist</span> · Dispatch Wall</div>
+    <span class="grow"></span>
+    <div class="clock" id="clock">--:--</div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="wall-board" id="board"></div>
+  <script type="module" src="/assets/wall.js"></script>
+</body>
+</html>
