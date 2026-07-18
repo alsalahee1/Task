@@ -135,21 +135,27 @@ button {
   font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 9px 16px; cursor: pointer;
-  transition: filter .15s ease, transform .05s ease, background-color .15s ease, box-shadow .15s ease;
+  transition: filter .18s ease, transform .12s cubic-bezier(.2, .8, .3, 1),
+    background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
 button:hover { background: var(--panel-3); }
-button:active { transform: scale(.98); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:active { transform: scale(.97); }
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 button.primary:hover { background: var(--accent); filter: brightness(1.08); }
 button.danger { background: transparent; border-color: var(--danger-border); color: var(--danger-fg); }
 button.danger:hover { background: var(--danger-bg); }
 button.big {
   width: 100%; padding: 18px; font-size: 18px; font-weight: 700;
   border-radius: 14px; background: var(--accent); border-color: var(--accent); color: #fff;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 38%, transparent);
 }
-button.big.green { background: var(--success-fg); border-color: var(--success-fg); }
-button:disabled { opacity: .5; cursor: not-allowed; filter: none; transform: none; }
+button.big:active { transform: scale(.98); }
+button.big.green { background: var(--success-fg); border-color: var(--success-fg);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--success-fg) 38%, transparent); }
+button:disabled { opacity: .5; cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
 button:focus-visible, .icon-btn:focus-visible {
   outline: none; box-shadow: 0 0 0 3px var(--focus-ring);
 }
@@ -158,14 +164,17 @@ button:focus-visible, .icon-btn:focus-visible {
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0; border-radius: 999px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease,
+    transform .12s cubic-bezier(.2, .8, .3, 1);
 }
 .icon-btn:hover { color: var(--text); filter: none; background: var(--panel-3); }
+.icon-btn:active { transform: scale(.92); }
 
 input, select, textarea {
   font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 9px 12px; width: 100%;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
 input:focus, select:focus, textarea:focus {
@@ -179,11 +188,13 @@ label {
 .card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm);
+  transition: background-color .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 .badge {
   display: inline-block; font-size: 11.5px; font-weight: 700;
   padding: 3px 10px; border-radius: 999px; letter-spacing: .02em;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease;
 }
 .badge.green  { color: var(--success-fg); border-color: var(--success-border); background: var(--success-bg); }
 .badge.amber  { color: var(--warning-fg); border-color: var(--warning-border); background: var(--warning-bg); }
@@ -200,12 +211,23 @@ label {
 /* top bar */
 .topbar {
   display: flex; align-items: center; gap: 16px;
-  padding: 12px 20px; background: var(--panel);
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   border-top: 3px solid var(--accent);
   border-image: linear-gradient(90deg, var(--accent) 70%, var(--brand-green)) 1;
   position: sticky; top: 0; z-index: 20;
   box-shadow: var(--shadow-sm);
+}
+/* The frosted-glass fill lives on a pseudo-element rather than directly on
+   .topbar: a `backdrop-filter` on an element makes it a "containing block"
+   for any `position: fixed` descendant — and the phone bottom nav (#tabs)
+   is a child of .topbar, so putting it there fixed #tabs to the topbar's
+   own box instead of the viewport. The pseudo-element sidesteps that. */
+.topbar::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  transition: background-color .2s ease;
 }
 .logo { font-weight: 800; font-size: 17px; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
 .logo span { color: var(--accent-2); }
@@ -230,10 +252,42 @@ label {
 .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; align-items: start; }
 .col h3 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; display: flex; justify-content: space-between; }
 .col .cards { display: flex; flex-direction: column; gap: 10px; }
-.task-card { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
-.task-card:hover { border-color: var(--accent); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.task-card {
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s cubic-bezier(.2, .8, .3, 1);
+  animation: card-in .32s cubic-bezier(.2, .8, .3, 1) both;
+}
+.task-card:hover { border-color: var(--accent); box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.task-card:active { transform: scale(.98); }
 .task-card .route { font-weight: 700; font-size: 15px; margin: 6px 0 4px; }
 .task-card .route em { color: var(--accent-2); font-style: normal; }
+
+/* Cards "materialize" into place on render — the first several stagger in,
+   the rest (if any) settle at the same modest delay so a long list never
+   feels sluggish to finish appearing. */
+@keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+.col .cards > .task-card:nth-child(1) { animation-delay: 0ms; }
+.col .cards > .task-card:nth-child(2) { animation-delay: 25ms; }
+.col .cards > .task-card:nth-child(3) { animation-delay: 50ms; }
+.col .cards > .task-card:nth-child(4) { animation-delay: 75ms; }
+.col .cards > .task-card:nth-child(5) { animation-delay: 100ms; }
+.col .cards > .task-card:nth-child(n+6) { animation-delay: 120ms; }
+
+/* Every tab/view switch swaps in fresh DOM, so a plain entrance animation
+   on the page's/agent app's top-level content plays automatically on
+   every navigation — the "smoothness" that was missing before. */
+@keyframes view-in { from { opacity: 0; transform: translateY(8px); } }
+.page > *, .agent-page > * { animation: view-in .28s cubic-bezier(.2, .8, .3, 1) both; }
+/* A `transform` animation on an element makes it a containing block for any
+   `position: fixed` descendant *while the animation runs* — and the agent
+   app's primary action button (#nextBtn) is fixed and nested inside this
+   card, so the translateY entrance briefly yanked it away from the
+   viewport bottom. Give that one card an opacity-only fade instead. */
+@keyframes fade-in-only { from { opacity: 0; } }
+.agent-page > *:has(#nextBtn) { animation: fade-in-only .28s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  .task-card, .page > *, .agent-page > * { animation: none; }
+}
 
 /* ---------- task status colours ----------
    Each stage fills the card with one solid, opaque colour that progresses
@@ -476,7 +530,9 @@ tr:hover td { background: var(--panel-2); }
     position: fixed; inset-inline: 0; bottom: 0; top: auto; z-index: 30;
     display: flex; flex-wrap: nowrap; overflow-x: auto;
     scrollbar-width: none; scroll-snap-type: x proximity;
-    background: var(--panel); border: none; border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5);
+    border: none; border-top: 1px solid var(--border);
     border-radius: 0; padding: 4px 4px calc(4px + env(safe-area-inset-bottom)) 4px;
     box-shadow: 0 -6px 16px rgba(0, 0, 0, .12);
   }
