@@ -30,6 +30,8 @@ jobs:
           mkdir -p ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          echo "Deploy key fingerprint actually in use:"
+          ssh-keygen -lf ~/.ssh/deploy_key
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "curl -fsSL https://raw.githubusercontent.com/alsalahee1/task/ui-modernization/deploy/dokploy-run.sh | DOMAIN=aeroassist.online bash"
