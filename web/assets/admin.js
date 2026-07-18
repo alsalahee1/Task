@@ -623,13 +623,13 @@ function renderFlights() {
     <table><thead><tr><th>Flight</th><th>Direction</th><th>Scheduled</th><th>Gate</th><th>Status</th><th></th></tr></thead>
     <tbody>
       ${state.flights.map(f => `<tr>
-        <td><b>${esc(f.flight_number)}</b></td>
-        <td>${f.direction}</td>
-        <td>${f.sched_time ? new Date(f.sched_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-        <td><select data-fgate="${f.id}">
+        <td data-label="Flight"><b>${esc(f.flight_number)}</b></td>
+        <td data-label="Direction">${f.direction}</td>
+        <td data-label="Scheduled">${f.sched_time ? new Date(f.sched_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+        <td data-label="Gate"><select data-fgate="${f.id}">
           ${gates.map(g => `<option value="${g.id}" ${g.id === f.gate?.id ? 'selected' : ''}>${esc(g.code)}</option>`).join('')}
         </select></td>
-        <td><select data-fstatus="${f.id}">
+        <td data-label="Status"><select data-fstatus="${f.id}">
           ${FLIGHT_STATUSES.map(st => `<option ${st === f.status ? 'selected' : ''}>${st}</option>`).join('')}
         </select></td>
         <td class="row">
@@ -653,10 +653,10 @@ function renderFlights() {
         </div>
       </td></tr>`).join('')}
       <tr>
-        <td><input id="nfNum" placeholder="XY123" style="width:110px"></td>
-        <td><select id="nfDir"><option>ARRIVAL</option><option>DEPARTURE</option></select></td>
-        <td><input id="nfTime" type="time"></td>
-        <td><select id="nfGate">${gates.map(g => `<option value="${g.id}">${esc(g.code)}</option>`).join('')}</select></td>
+        <td data-label="Flight"><input id="nfNum" placeholder="XY123" style="width:110px"></td>
+        <td data-label="Direction"><select id="nfDir"><option>ARRIVAL</option><option>DEPARTURE</option></select></td>
+        <td data-label="Scheduled"><input id="nfTime" type="time"></td>
+        <td data-label="Gate"><select id="nfGate">${gates.map(g => `<option value="${g.id}">${esc(g.code)}</option>`).join('')}</select></td>
         <td class="muted small">add flight</td>
         <td><button class="primary" id="nfAdd">Add</button></td>
       </tr>
@@ -749,19 +749,19 @@ function renderWheelchairs() {
     <table><thead><tr><th>QR code</th><th>Type</th><th>Status</th><th>Location</th><th>On task</th><th></th></tr></thead>
     <tbody>
       ${state.wheelchairs.map(c => `<tr>
-        <td><b>${esc(c.qr_code)}</b></td>
-        <td>${esc(c.type)}</td>
-        <td><span class="badge ${CHAIR_BADGE[c.status] || ''}">${esc(c.status)}</span></td>
-        <td>${c.current_location ? esc(c.current_location.code) + ' — ' + esc(c.current_location.name)
+        <td data-label="QR code"><b>${esc(c.qr_code)}</b></td>
+        <td data-label="Type">${esc(c.type)}</td>
+        <td data-label="Status"><span class="badge ${CHAIR_BADGE[c.status] || ''}">${esc(c.status)}</span></td>
+        <td data-label="Location">${c.current_location ? esc(c.current_location.code) + ' — ' + esc(c.current_location.name)
              : c.status === 'IN_USE' ? '<span class="muted">with agent</span>' : '<span class="muted">unknown</span>'}</td>
-        <td>${c.current_task_id ? `<a href="#" data-open-task="${c.current_task_id}">#${c.current_task_id}</a>` : '—'}</td>
+        <td data-label="On task">${c.current_task_id ? `<a href="#" data-open-task="${c.current_task_id}">#${c.current_task_id}</a>` : '—'}</td>
         <td>${c.status !== 'IN_USE' ? `<button data-chair-toggle="${c.id}" data-next="${c.status === 'MAINTENANCE' ? 'AVAILABLE' : 'MAINTENANCE'}">
           ${c.status === 'MAINTENANCE' ? 'Back in service' : 'To maintenance'}</button>` : ''}</td>
       </tr>`).join('')}
       <tr>
-        <td><input id="ncQr" placeholder="WC-S1-005" style="width:130px"></td>
-        <td><select id="ncType"><option>MANUAL</option><option>ELECTRIC</option><option>AISLE</option><option>CART</option></select></td>
-        <td colspan="2"><select id="ncStorage">${storages.map(st => `<option value="${st.id}">${esc(st.code)} — ${esc(st.name)}</option>`).join('')}</select></td>
+        <td data-label="QR code"><input id="ncQr" placeholder="WC-S1-005" style="width:130px"></td>
+        <td data-label="Type"><select id="ncType"><option>MANUAL</option><option>ELECTRIC</option><option>AISLE</option><option>CART</option></select></td>
+        <td colspan="2" data-label="Storage"><select id="ncStorage">${storages.map(st => `<option value="${st.id}">${esc(st.code)} — ${esc(st.name)}</option>`).join('')}</select></td>
         <td class="muted small">register chair</td>
         <td><button class="primary" id="ncAdd">Add</button></td>
       </tr>
@@ -804,16 +804,16 @@ function renderLocations() {
         <table><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Terminal</th><th>GPS</th></tr></thead>
         <tbody>
           ${state.locations.map(l => `<tr>
-            <td><b>${esc(l.code)}</b></td><td>${esc(l.name)}</td>
-            <td><span class="badge">${esc(l.type)}</span></td><td>${esc(l.terminal)}</td>
-            <td class="muted small">${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}</td>
+            <td data-label="Code"><b>${esc(l.code)}</b></td><td data-label="Name">${esc(l.name)}</td>
+            <td data-label="Type"><span class="badge">${esc(l.type)}</span></td><td data-label="Terminal">${esc(l.terminal)}</td>
+            <td data-label="GPS" class="muted small">${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}</td>
           </tr>`).join('')}
           <tr>
-            <td><input id="nlCode" placeholder="C12" style="width:70px"></td>
-            <td><input id="nlName" placeholder="Gate C12"></td>
-            <td><select id="nlType">${LOC_TYPES.map(t => `<option>${t}</option>`).join('')}</select></td>
-            <td><input id="nlTerm" placeholder="T1" style="width:60px" value="T1"></td>
-            <td class="row"><input id="nlLat" placeholder="lat" style="width:110px">
+            <td data-label="Code"><input id="nlCode" placeholder="C12" style="width:70px"></td>
+            <td data-label="Name"><input id="nlName" placeholder="Gate C12"></td>
+            <td data-label="Type"><select id="nlType">${LOC_TYPES.map(t => `<option>${t}</option>`).join('')}</select></td>
+            <td data-label="Terminal"><input id="nlTerm" placeholder="T1" style="width:60px" value="T1"></td>
+            <td data-label="GPS" class="row"><input id="nlLat" placeholder="lat" style="width:110px">
               <input id="nlLng" placeholder="lng" style="width:110px">
               <button class="primary" id="nlAdd">Add</button></td>
           </tr>
@@ -879,17 +879,17 @@ function renderTemplates() {
     <table><thead><tr><th>From</th><th>To</th><th>Usual time (min)</th><th>Samples</th><th>Source</th><th></th></tr></thead>
     <tbody>
       ${state.templates.map(t => `<tr>
-        <td>${esc(t.from_code)} <span class="muted small">${esc(t.from_name)}</span></td>
-        <td>${esc(t.to_code)} <span class="muted small">${esc(t.to_name)}</span></td>
-        <td><input style="width:90px" type="number" step="0.5" min="0.5" value="${t.est_minutes}" data-tpl="${t.id}"></td>
-        <td>${t.sample_count}</td>
-        <td>${t.manually_set ? '<span class="badge">manual</span>' : '<span class="badge purple">learned</span>'}</td>
+        <td data-label="From">${esc(t.from_code)} <span class="muted small">${esc(t.from_name)}</span></td>
+        <td data-label="To">${esc(t.to_code)} <span class="muted small">${esc(t.to_name)}</span></td>
+        <td data-label="Usual time (min)"><input style="width:90px" type="number" step="0.5" min="0.5" value="${t.est_minutes}" data-tpl="${t.id}"></td>
+        <td data-label="Samples">${t.sample_count}</td>
+        <td data-label="Source">${t.manually_set ? '<span class="badge">manual</span>' : '<span class="badge purple">learned</span>'}</td>
         <td><button data-save-tpl="${t.id}" data-from="${t.from_id}" data-to="${t.to_id}">Save</button></td>
       </tr>`).join('')}
       <tr>
-        <td><select id="newFrom">${locOptions()}</select></td>
-        <td><select id="newTo">${locOptions()}</select></td>
-        <td><input id="newMin" style="width:90px" type="number" step="0.5" min="0.5" placeholder="min"></td>
+        <td data-label="From"><select id="newFrom">${locOptions()}</select></td>
+        <td data-label="To"><select id="newTo">${locOptions()}</select></td>
+        <td data-label="Usual time (min)"><input id="newMin" style="width:90px" type="number" step="0.5" min="0.5" placeholder="min"></td>
         <td colspan="2" class="muted small">add a new route</td>
         <td><button class="primary" id="addTpl">Add</button></td>
       </tr>
@@ -970,16 +970,16 @@ async function renderReports() {
       <div class="card grow" style="min-width:320px">
         <h3>Per agent</h3>
         <table><thead><tr><th>Agent</th><th>Assigned</th><th>Completed</th><th>Distance</th></tr></thead>
-        <tbody>${s.per_agent.map(a => `<tr><td>${esc(a.name)}</td><td>${a.tasks_assigned}</td>
-          <td>${a.tasks_completed}</td><td>${a.distance_meters ? (a.distance_meters / 1000).toFixed(1) + ' km' : '—'}</td></tr>`).join('')
+        <tbody>${s.per_agent.map(a => `<tr><td data-label="Agent">${esc(a.name)}</td><td data-label="Assigned">${a.tasks_assigned}</td>
+          <td data-label="Completed">${a.tasks_completed}</td><td data-label="Distance">${a.distance_meters ? (a.distance_meters / 1000).toFixed(1) + ' km' : '—'}</td></tr>`).join('')
           || '<tr><td colspan="4" class="muted">No data</td></tr>'}</tbody></table>
       </div>
       <div class="card grow" style="min-width:320px">
         <h3>Per route (template vs reality)</h3>
         <table><thead><tr><th>Route</th><th>Usual time</th><th>Samples</th><th>In period</th><th>Source</th></tr></thead>
-        <tbody>${s.per_route.map(r => `<tr><td>${esc(r.from_code)} → ${esc(r.to_code)}</td>
-          <td>${fmtMin(r.est_minutes)}</td><td>${r.sample_count}</td><td>${r.actuals_in_period}</td>
-          <td>${r.manually_set ? 'manual' : '<span class="badge purple">learned</span>'}</td></tr>`).join('')}</tbody></table>
+        <tbody>${s.per_route.map(r => `<tr><td data-label="Route">${esc(r.from_code)} → ${esc(r.to_code)}</td>
+          <td data-label="Usual time">${fmtMin(r.est_minutes)}</td><td data-label="Samples">${r.sample_count}</td><td data-label="In period">${r.actuals_in_period}</td>
+          <td data-label="Source">${r.manually_set ? 'manual' : '<span class="badge purple">learned</span>'}</td></tr>`).join('')}</tbody></table>
       </div>
     </div>`;
 
@@ -1020,13 +1020,13 @@ async function renderCompliance(from, to) {
         <th>Compliance</th><th>Breaches</th><th>Late notice</th><th>Breaches w/ late notice</th>
       </tr></thead>
       <tbody>${rep.airlines.map(a => `<tr>
-        <td><b>${esc(a.airline)}</b></td>
-        <td>${a.requests}</td><td>${a.completed}</td><td>${a.sla_measured}</td>
-        <td><span class="badge ${a.compliance_pct == null ? '' : a.compliance_pct >= 90 ? 'green' : a.compliance_pct >= 70 ? 'amber' : 'red'}">
+        <td data-label="Airline"><b>${esc(a.airline)}</b></td>
+        <td data-label="Requests">${a.requests}</td><td data-label="Completed">${a.completed}</td><td data-label="SLA measured">${a.sla_measured}</td>
+        <td data-label="Compliance"><span class="badge ${a.compliance_pct == null ? '' : a.compliance_pct >= 90 ? 'green' : a.compliance_pct >= 70 ? 'amber' : 'red'}">
           ${a.compliance_pct ?? '—'}%</span></td>
-        <td>${a.breaches}</td>
-        <td>${a.late_notifications}</td>
-        <td>${a.late_notification_breaches || 0}</td>
+        <td data-label="Breaches">${a.breaches}</td>
+        <td data-label="Late notice">${a.late_notifications}</td>
+        <td data-label="Breaches w/ late notice">${a.late_notification_breaches || 0}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">No assistance requests in this period</td></tr>'}</tbody></table>
       <p class="muted small mt">Breaches marked with late airline notice are the ones a handler can attribute to the airline rather than to ground operations.</p>
     </div>`;
@@ -1061,11 +1061,11 @@ async function renderTeam() {
     <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Skills</th>
       <th>Status</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
     <tbody>${rows.map(u => `<tr>
-      <td><b>${esc(u.name)}</b></td>
-      <td class="muted">@${esc(u.username)}</td>
-      <td><span class="badge ${ROLE_BADGE[u.role] || ''}">${u.role}</span></td>
-      <td class="small">${u.skills?.length ? u.skills.join(', ') : '—'}</td>
-      <td>${u.disabled ? '<span class="badge red">disabled</span>'
+      <td data-label="Name"><b>${esc(u.name)}</b></td>
+      <td data-label="Username" class="muted">@${esc(u.username)}</td>
+      <td data-label="Role"><span class="badge ${ROLE_BADGE[u.role] || ''}">${u.role}</span></td>
+      <td data-label="Skills" class="small">${u.skills?.length ? u.skills.join(', ') : '—'}</td>
+      <td data-label="Status">${u.disabled ? '<span class="badge red">disabled</span>'
         : u.on_break ? '<span class="badge amber">on break</span>'
         : u.on_duty ? '<span class="badge green">on duty</span>'
         : '<span class="badge">off duty</span>'}</td>
@@ -1142,11 +1142,11 @@ async function renderAudit() {
       <span class="muted small">Most recent 200 actions · who did what, when</span></div>
     <table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
     <tbody>${state.audit.map(e => `<tr>
-      <td class="muted small" style="white-space:nowrap">${new Date(e.at).toLocaleString()}</td>
-      <td>${esc(e.actor_name)}</td>
-      <td><span class="badge">${esc(e.action)}</span></td>
-      <td class="small">${esc(e.target || '—')}</td>
-      <td class="small muted">${esc(e.detail || '')}</td>
+      <td data-label="When" class="muted small" style="white-space:nowrap">${new Date(e.at).toLocaleString()}</td>
+      <td data-label="Who">${esc(e.actor_name)}</td>
+      <td data-label="Action"><span class="badge">${esc(e.action)}</span></td>
+      <td data-label="Target" class="small">${esc(e.target || '—')}</td>
+      <td data-label="Detail" class="small muted">${esc(e.detail || '')}</td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No activity yet</td></tr>'}</tbody></table>
   </div>`;
 }

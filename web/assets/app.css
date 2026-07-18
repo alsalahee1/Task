@@ -498,12 +498,22 @@ tr:hover td { background: var(--panel-2); }
   input, select, textarea { font-size: 16px; padding: 11px 12px; }
   button { padding: 11px 16px; }
   button.big { padding: 16px; }
+  /* action-button pairs inside a modal (assign/cancel, auto-assign/reassign…)
+     wrap onto their own full-width line each instead of squeezing side by
+     side — a 160px floor is enough to force the wrap on a phone-width row.
+     The header's lone close button is excluded — it must stay put next to
+     the title, not stretch across its own line. */
+  .modal .row button:not(#closeModal) { flex: 1 1 160px; }
 
   /* Modals become bottom sheets: full width, rounded only at the top,
-     sliding up rather than fading in from the center. */
+     sliding up rather than fading in from the center. `!important` is
+     needed here because a few modals set an inline `style="width:520px"`
+     (etc.) for their desktop size — an inline style always beats a
+     stylesheet rule, so without it those modals would ignore the sheet
+     treatment entirely and stay pinned at a fixed desktop width. */
   .modal-back { align-items: flex-end; padding: 0; }
   .modal {
-    width: 100%; max-width: 100%; margin: 0; border-radius: 20px 20px 0 0;
+    width: 100% !important; max-width: 100% !important; margin: 0; border-radius: 20px 20px 0 0;
     max-height: 92vh; overflow-y: auto;
     padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
     animation: sheet-in .22s cubic-bezier(.2, .8, .3, 1);
@@ -515,5 +525,54 @@ tr:hover td { background: var(--panel-2); }
   @keyframes sheet-in { from { opacity: .4; transform: translateY(20px); } }
   @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
 
-  .card table { min-width: 640px; }
+  /* Any field-group / sub-panel wrapped in a bare <div> inside a .row
+     (form field pairs, the report date-range controls, the task-detail
+     content/sidebar split, the locations page's two side-by-side cards…)
+     stacks to full width instead of being squeezed side by side — one
+     column, thumb-height fields, the way a native form screen reads. */
+  .row > div { flex: 1 1 100%; min-width: 0 !important; }
+
+  /* ---------- data tables → native list rows ----------
+     A wide table read sideways is what makes mobile web feel like a
+     shrunk desktop site. Instead every row becomes its own card with
+     "label: value" lines (label from data-label, set in admin.js) — the
+     same shape as a native Mail/Files/Settings list row. The header row
+     is visually hidden (kept for screen readers). */
+  .card table, .card thead, .card tbody, .card tr, .card th, .card td { display: block; width: 100%; }
+  .card table { border: none; }
+  .card thead tr {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0; padding: 0; margin: -1px;
+  }
+  .card tbody tr {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 12px; margin-bottom: 10px;
+  }
+  .card tbody tr:last-child { margin-bottom: 0; }
+  .card td {
+    border: none; padding: 6px 0; display: flex; align-items: center;
+    justify-content: space-between; gap: 12px; text-align: end; font-size: 14px;
+  }
+  .card td[data-label]::before {
+    content: attr(data-label); font-weight: 700; color: var(--muted); text-align: start;
+    text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; flex: 0 0 auto;
+  }
+  .card td:empty { display: none; }
+  /* a cell's own inline width (QR/code/lat-lng inputs sized for a table
+     column) no longer applies once that cell is a full-width list row */
+  .card td input, .card td select, .card td textarea { width: 100% !important; }
+  .card td .row { justify-content: flex-end; }
+
+  /* ---------- agent app: sticky bottom action bar ----------
+     The primary action ("Chair collected", "Complete", …) is the one
+     thing a courier/agent app should never make you scroll to find —
+     pin it to the bottom of the screen, like a native app's persistent
+     CTA. Extra bottom padding only applies on screens that actually have
+     the button, so the home task list and completed-task view don't
+     carry dead space. */
+  .agent-page:has(#nextBtn) { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+  #nextBtn {
+    position: fixed; inset-inline: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 25; margin-top: 0 !important; box-shadow: var(--shadow-lg);
+  }
 }
